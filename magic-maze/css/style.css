@@ -1,0 +1,55 @@
+/* Файл: magic-maze/css/style.css */
+/* Стили для игры "Сказочный лабиринт: Магия процедурных миров" */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #0d0520;
+    font-family: Arial, sans-serif;
+}
+
+body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+#gameCanvas {
+    display: block;
+    max-width: 500px;
+    max-height: 700px;
+    width: 100vw;
+    height: 100vh;
+    border-radius: 8px;
+    box-shadow: 0 0 30px rgba(155, 89, 182, 0.3);
+}
+
+/* Адаптивность для мобильных */
+@media (max-width: 520px) {
+    #gameCanvas {
+        width: 100vw;
+        height: 100vh;
+        max-width: 100vw;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+    #gameCanvas {
+        height: 100vh;
+        width: auto;
+    }
+}
