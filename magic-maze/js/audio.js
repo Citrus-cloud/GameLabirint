@@ -254,6 +254,318 @@ class AudioManager {
     }
 
     // ======================================================================
+    // ЗВУКИ МОЛНИИ (Удар молнии)
+    // ======================================================================
+
+    // === ЗВУК ЗАРЯДКИ МОЛНИИ (нарастающий низкий гул, 3 секунды) ===
+    // Возвращает объект {stop} для остановки звука
+    playLightningCharge() {
+        if (!this.enabled) return { stop: () => {} };
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Низкий гул (осциллятор с повышением частоты)
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(40, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 3);
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.15, now + 0.5);
+        gain.gain.linearRampToValueAtTime(0.3, now + 2.5);
+        gain.gain.linearRampToValueAtTime(0.35, now + 3);
+        
+        // Фильтр (приглушённый звук)
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(150, now);
+        filter.frequency.exponentialRampToValueAtTime(800, now + 3);
+        
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 3.5);
+        
+        // Суб-бас (дополнительная глубина)
+        const sub = this.ctx.createOscillator();
+        const subGain = this.ctx.createGain();
+        sub.type = 'sine';
+        sub.frequency.setValueAtTime(30, now);
+        sub.frequency.linearRampToValueAtTime(60, now + 3);
+        subGain.gain.setValueAtTime(0, now);
+        subGain.gain.linearRampToValueAtTime(0.2, now + 1);
+        subGain.gain.linearRampToValueAtTime(0.25, now + 3);
+        sub.connect(subGain);
+        subGain.connect(this.ctx.destination);
+        sub.start(now);
+        sub.stop(now + 3.5);
+        
+        return {
+            stop: () => {
+                try {
+                    gain.gain.cancelScheduledValues(this.ctx.currentTime);
+                    gain.gain.setValueAtTime(gain.gain.value, this.ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.1);
+                    subGain.gain.cancelScheduledValues(this.ctx.currentTime);
+                    subGain.gain.setValueAtTime(subGain.gain.value, this.ctx.currentTime);
+                    subGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.1);
+                } catch(e) {}
+            }
+        };
+    }
+
+    // === ЗВУК УДАРА МОЛНИИ (громкий треск + бас) ===
+    playLightningStrike() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Белый шум (треск)
+        const bufferSize = this.ctx.sampleRate * 0.4;
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            // Убывающий шум с импульсами
+            const decay = Math.exp(-i / (bufferSize * 0.1));
+            const crackle = Math.random() < 0.02 ? 2 : 1;
+            data[i] = (Math.random() * 2 - 1) * decay * crackle;
+        }
+        const noise = this.ctx.createBufferSource();
+        const noiseGain = this.ctx.createGain();
+        noise.buffer = buffer;
+        noiseGain.gain.setValueAtTime(0.5, now);
+        noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+        
+        // Фильтр для треска (высокие частоты)
+        const highFilter = this.ctx.createBiquadFilter();
+        highFilter.type = 'highpass';
+        highFilter.frequency.value = 2000;
+        
+        noise.connect(highFilter);
+        highFilter.connect(noiseGain);
+        noiseGain.connect(this.ctx.destination);
+        noise.start(now);
+        
+        // Бас (осциллятор с быстрым падением частоты)
+        const bass = this.ctx.createOscillator();
+        const bassGain = this.ctx.createGain();
+        bass.type = 'sine';
+        bass.frequency.setValueAtTime(300, now);
+        bass.frequency.exponentialRampToValueAtTime(30, now + 0.3);
+        bassGain.gain.setValueAtTime(0.5, now);
+        bassGain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        bass.connect(bassGain);
+        bassGain.connect(this.ctx.destination);
+        bass.start(now);
+        bass.stop(now + 0.6);
+        
+        // Средний треск (квадрат с падением)
+        const mid = this.ctx.createOscillator();
+        const midGain = this.ctx.createGain();
+        mid.type = 'square';
+        mid.frequency.setValueAtTime(1500, now);
+        mid.frequency.exponentialRampToValueAtTime(100, now + 0.15);
+        midGain.gain.setValueAtTime(0.3, now);
+        midGain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+        mid.connect(midGain);
+        midGain.connect(this.ctx.destination);
+        mid.start(now);
+        mid.stop(now + 0.25);
+    }
+
+    // ======================================================================
+    // ЗВУКИ СКИНОВ (при движении)
+    // ======================================================================
+
+    // Защита от слишком частого воспроизведения звуков скинов
+    _lastSkinSoundTime = 0;
+    _skinSoundInterval = 300; // мс
+
+    _canPlaySkinSound() {
+        const now = performance.now();
+        if (now - this._lastSkinSoundTime < this._skinSoundInterval) return false;
+        this._lastSkinSoundTime = now;
+        return true;
+    }
+
+    // === Тир 2: Тихое магическое журчание при движении ===
+    playSkinMagicRustle() {
+        if (!this.enabled || !this._canPlaySkinSound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Лёгкий шепот (фильтрованный шум)
+        const bufferSize = this.ctx.sampleRate * 0.1;
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.5)) * 0.3;
+        }
+        const noise = this.ctx.createBufferSource();
+        const gain = this.ctx.createGain();
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = 3000;
+        filter.Q.value = 2;
+        noise.buffer = buffer;
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+        noise.start(now);
+    }
+
+    // === Тир 3 огонь: Потрескивание огня ===
+    playSkinFireCrackle() {
+        if (!this.enabled || !this._canPlaySkinSound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Импульсный треск
+        const bufferSize = this.ctx.sampleRate * 0.08;
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            data[i] = (Math.random() < 0.1 ? (Math.random() * 2 - 1) : 0) * Math.exp(-i / (bufferSize * 0.3));
+        }
+        const noise = this.ctx.createBufferSource();
+        const gain = this.ctx.createGain();
+        noise.buffer = buffer;
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+        noise.connect(gain);
+        gain.connect(this.ctx.destination);
+        noise.start(now);
+    }
+
+    // === Тир 3 лёд: Звон льдинок ===
+    playSkinIceChime() {
+        if (!this.enabled || !this._canPlaySkinSound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        const freq = 2000 + Math.random() * 1500;
+        osc.frequency.setValueAtTime(freq, now);
+        osc.frequency.exponentialRampToValueAtTime(freq * 0.9, now + 0.1);
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.15);
+    }
+
+    // === Тир 4: Эмбиент с эхом ===
+    playSkinAmbient() {
+        if (!this.enabled || !this._canPlaySkinSound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Гулкий тон
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(150 + Math.random() * 100, now);
+        gain.gain.setValueAtTime(0.03, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+        
+        // Эхо
+        const echo = this.ctx.createOscillator();
+        const echoGain = this.ctx.createGain();
+        echo.type = 'sine';
+        echo.frequency.setValueAtTime(180 + Math.random() * 80, now + 0.15);
+        echoGain.gain.setValueAtTime(0.015, now + 0.15);
+        echoGain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        echo.connect(echoGain);
+        echoGain.connect(this.ctx.destination);
+        echo.start(now + 0.15);
+        echo.stop(now + 0.45);
+    }
+
+    // === Тир 5 Король теней: Низкий гул + удары сердца ===
+    playSkinShadowPulse() {
+        if (!this.enabled || !this._canPlaySkinSound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Низкий гул
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(45, now);
+        gain.gain.setValueAtTime(0.05, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.45);
+        
+        // Удар сердца
+        const heart = this.ctx.createOscillator();
+        const heartGain = this.ctx.createGain();
+        heart.type = 'sine';
+        heart.frequency.setValueAtTime(60, now + 0.05);
+        heart.frequency.exponentialRampToValueAtTime(30, now + 0.15);
+        heartGain.gain.setValueAtTime(0.08, now + 0.05);
+        heartGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        heart.connect(heartGain);
+        heartGain.connect(this.ctx.destination);
+        heart.start(now + 0.05);
+        heart.stop(now + 0.25);
+    }
+
+    // === Тир 5 Создатель звёзд: Небесные перезвоны ===
+    playSkinStarChime() {
+        if (!this.enabled || !this._canPlaySkinSound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Хрустальные колокольчики (случайные ноты пентатоники)
+        const notes = [1047, 1175, 1319, 1568, 1760, 2093]; // C6-пентатоника
+        const freq = notes[Math.floor(Math.random() * notes.length)];
+        
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now);
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+        
+        // Обертон
+        const harm = this.ctx.createOscillator();
+        const harmGain = this.ctx.createGain();
+        harm.type = 'sine';
+        harm.frequency.setValueAtTime(freq * 2, now + 0.02);
+        harmGain.gain.setValueAtTime(0.02, now + 0.02);
+        harmGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        harm.connect(harmGain);
+        harmGain.connect(this.ctx.destination);
+        harm.start(now + 0.02);
+        harm.stop(now + 0.25);
+    }
+
+    // ======================================================================
     // УЛУЧШЕНИЕ 3: Звуки эмоций лисёнка
     // Каждый звук — короткий, приятный для детей, не режет слух
     // ======================================================================

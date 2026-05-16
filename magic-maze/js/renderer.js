@@ -108,17 +108,27 @@ class Renderer {
     }
 
     // === ОТРИСОВКА ЛИСЁНКА ФОКСИ ===
-    drawPlayer(player, skinOverride) {
+    drawPlayer(player, skinOverride, skinEffects) {
         if (!player.isVisible) return;
 
         const cs = this.cellSize;
         // Улучшение 3: смещения от эмоций
         const emotionJump = player.emotionJumpOffset || 0;
+        // Смещение от полёта (тир 4 скина)
+        const flyOffset = skinEffects ? skinEffects.getFlyOffset() : 0;
         const px = this.offsetX + player.pixelX + cs / 2;
-        const py = this.offsetY + player.pixelY + cs / 2 - player.bounceOffset - emotionJump;
+        const py = this.offsetY + player.pixelY + cs / 2 - player.bounceOffset - emotionJump - flyOffset;
         const size = cs * 0.35;
 
         this.ctx.save();
+
+        // Кувырок от скина (тир 3)
+        const flipAngle = skinEffects ? skinEffects.getFlipAngle() : 0;
+        if (flipAngle > 0) {
+            this.ctx.translate(px, py);
+            this.ctx.rotate(flipAngle);
+            this.ctx.translate(-px, -py);
+        }
 
         // Победное вращение
         if (player.isVictory) {
@@ -1443,115 +1453,35 @@ class Renderer {
         ctx.closePath();
     }
 
-    // === ОТРИСОВКА СКИНА В ИГРЕ (поверх базового лисёнка) ===
-    drawSkinEffects(player, skin, time) {
+    // === ОТРИСОВКА ЭФФЕКТОВ СКИНА (новая система через SkinEffectsSystem) ===
+    drawSkinEffects(player, skin, time, skinEffects) {
         if (!skin) return;
+        // Если передана новая система эффектов — используем её
+        if (skinEffects) {
+            skinEffects.render(this.ctx, this.offsetX, this.offsetY, player, skin, time);
+            return;
+        }
+        // Фоллбэк для совместимости (минимальные эффекты)
         const ctx = this.ctx;
         const cs = this.cellSize;
-        const emotionJump = player.emotionJumpOffset || 0;
         const px = this.offsetX + player.pixelX + cs / 2;
-        const py = this.offsetY + player.pixelY + cs / 2 - player.bounceOffset - emotionJump;
-        const drawY = player.isVictory ? py - player.victoryJump : py;
+        const py = this.offsetY + player.pixelY + cs / 2 - player.bounceOffset;
         const size = cs * 0.35;
-
-        // Эффекты по тиру
-        if (skin.effect === 'fire') {
-            // Огненный хвост — мерцающие частицы огня
-            for (let i = 0; i < 3; i++) {
-                const fx = px - size * 0.8 + (Math.random() - 0.5) * 10;
-                const fy = drawY + size * 0.2 + (Math.random() - 0.5) * 5;
-                ctx.globalAlpha = 0.5 + Math.random() * 0.5;
-                ctx.fillStyle = ['#ff4400', '#ff8800', '#ffcc00'][Math.floor(Math.random() * 3)];
-                ctx.beginPath();
-                ctx.arc(fx, fy - Math.random() * 8, 2 + Math.random() * 3, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            ctx.globalAlpha = 1;
-        } else if (skin.effect === 'ice') {
-            // Ледяной блеск — снежинки вокруг
-            ctx.globalAlpha = 0.6;
-            for (let i = 0; i < 4; i++) {
-                const angle = time * 0.002 + i * Math.PI / 2;
-                const fx = px + Math.cos(angle) * size * 1.2;
-                const fy = drawY + Math.sin(angle) * size * 1.2;
-                ctx.fillStyle = '#b3e5fc';
-                ctx.beginPath();
-                ctx.arc(fx, fy, 2, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            ctx.globalAlpha = 1;
-        } else if (skin.effect === 'ghost') {
-            // Призрачный шлейф
-            ctx.globalAlpha = 0.2;
-            ctx.fillStyle = '#82b1ff';
-            ctx.beginPath();
-            ctx.ellipse(px, drawY, size * 1.3, size * 1.5, 0, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.globalAlpha = 1;
-        } else if (skin.effect === 'cosmic') {
-            // Звёзды внутри силуэта
-            ctx.save();
-            ctx.beginPath();
-            ctx.ellipse(px, drawY, size, size * 1.1, 0, 0, Math.PI * 2);
-            ctx.clip();
-            for (let i = 0; i < 8; i++) {
-                const sx = px + Math.sin(time * 0.001 + i * 2) * size * 0.7;
-                const sy = drawY + Math.cos(time * 0.0015 + i * 1.5) * size * 0.8;
-                ctx.fillStyle = '#ffffff';
-                ctx.globalAlpha = 0.5 + Math.sin(time * 0.005 + i) * 0.5;
-                ctx.beginPath();
-                ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            ctx.globalAlpha = 1;
-            ctx.restore();
-        } else if (skin.effect === 'shadow_king') {
-            // Пульсирующая аура
-            const pulse = Math.sin(time * 0.003) * 5;
-            ctx.globalAlpha = 0.3;
-            const grad = ctx.createRadialGradient(px, drawY, size, px, drawY, size * 2 + pulse);
-            grad.addColorStop(0, '#9c27b0');
-            grad.addColorStop(1, 'transparent');
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.arc(px, drawY, size * 2 + pulse, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.globalAlpha = 1;
-        } else if (skin.effect === 'galaxy') {
-            // Галактические рукава
-            ctx.save();
-            ctx.beginPath();
-            ctx.ellipse(px, drawY, size * 1.2, size * 1.3, 0, 0, Math.PI * 2);
-            ctx.clip();
-            
-            ctx.globalAlpha = 0.6;
-            for (let arm = 0; arm < 3; arm++) {
-                const baseAngle = time * 0.001 + arm * Math.PI * 2 / 3;
-                for (let j = 0; j < 6; j++) {
-                    const dist = j * size * 0.2;
-                    const angle = baseAngle + j * 0.3;
-                    const sx = px + Math.cos(angle) * dist;
-                    const sy = drawY + Math.sin(angle) * dist;
-                    ctx.fillStyle = ['#ffd700', '#ff69b4', '#87ceeb'][arm];
-                    ctx.beginPath();
-                    ctx.arc(sx, sy, 1.5 - j * 0.1, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-            ctx.globalAlpha = 1;
-            ctx.restore();
-        }
-
-        // Свечение для тиров 3+
         if (skin.glowIntensity >= 10) {
             ctx.shadowColor = skin.glowColor;
             ctx.shadowBlur = skin.glowIntensity * 0.3 + Math.sin(time * 0.003) * 3;
             ctx.beginPath();
-            ctx.ellipse(px, drawY, size * 0.3, size * 0.3, 0, 0, Math.PI * 2);
+            ctx.ellipse(px, py, size * 0.3, size * 0.3, 0, 0, Math.PI * 2);
             ctx.fillStyle = 'transparent';
             ctx.fill();
             ctx.shadowBlur = 0;
         }
+    }
+
+    // === ОТРИСОВКА МОЛНИИ (поверх всего) ===
+    drawLightning(lightning) {
+        if (!lightning || !lightning.isActive()) return;
+        lightning.render(this.ctx, this.offsetX, this.offsetY, this.width, this.height);
     }
 
     // === БОНУС-КОМНАТА ===
