@@ -18,10 +18,17 @@ class Game {
         // Canvas и контекст
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
+        // Первичная установка размеров (DPR-aware). Вызвать ПЕРЕД созданием
+        // Renderer, чтобы он сразу получил корректные логические размеры.
         this.resizeCanvas();
 
         // Системы
         this.renderer = new Renderer(this.canvas);
+        // Renderer.width/height в конструкторе берутся из canvas.width
+        // (физические пиксели). Перезаписываем их логическими сразу же,
+        // чтобы пререндер фона/стен работал в правильной системе координат.
+        this.renderer.width = this._viewW;
+        this.renderer.height = this._viewH;
         this.particles = new ParticleSystem();
         this.audio = new AudioManager();
         this.storage = new GameStorage();
@@ -41,6 +48,10 @@ class Game {
 
         // Меню
         this.menu = new MenuSystem(this.canvas, this.ctx);
+        // Перезаписываем размеры логическими CSS-пикселями (см. комментарий
+        // выше для renderer).
+        this.menu.width = this._viewW;
+        this.menu.height = this._viewH;
 
         // Состояние
         this.state = GAME_CONSTANTS.STATES.MENU;
@@ -92,21 +103,54 @@ class Game {
         requestAnimationFrame((t) => this.gameLoop(t));
     }
 
-    // Адаптивный размер Canvas с учётом DPR (но рендер всё равно в координатах canvas)
+    // Адаптивный размер Canvas с учётом DPR.
+    // viewW/viewH — это «логические» CSS-пиксели, в которых работает вся игровая
+    // логика (хитбоксы, координаты). Бэкбуфер canvas.width/height — это
+    // физические пиксели (умноженные на DPR). Контекст масштабируется один раз,
+    // чтобы 1 единица == 1 CSS-пиксель. Это устраняет размытие шрифтов на
+    // ретина-экранах и стрейч-эффект на мобильных.
     resizeCanvas() {
-        const maxW = Math.min(500, window.innerWidth);
-        const maxH = Math.min(700, window.innerHeight);
-        this.canvas.width = maxW;
-        this.canvas.height = maxH;
+        const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+        // Сохраняем целевое соотношение сторон 5:7 на десктопе, на мобильных —
+        // подстраиваемся под экран (но не выше 500x700 на широких).
+        const winW = window.innerWidth;
+        const winH = window.innerHeight;
+        let viewW, viewH;
+        if (winW <= 520) {
+            // Мобильное устройство — занимаем весь экран
+            viewW = winW;
+            viewH = winH;
+        } else {
+            // Десктоп/планшет — сохраняем игровую пропорцию
+            const ratio = 500 / 700;
+            const fitH = Math.min(700, winH);
+            const fitW = Math.min(500, fitH * ratio, winW);
+            viewW = Math.floor(fitW);
+            viewH = Math.floor(fitW / ratio);
+        }
+        this._viewW = viewW;
+        this._viewH = viewH;
+        this._dpr = dpr;
+
+        // Физический размер бэкбуфера
+        this.canvas.width  = Math.floor(viewW * dpr);
+        this.canvas.height = Math.floor(viewH * dpr);
+        // CSS-размер canvas — ровно столько, сколько нам нужно (никакого стрейча)
+        this.canvas.style.width  = viewW + 'px';
+        this.canvas.style.height = viewH + 'px';
+
+        // Один раз масштабируем контекст: дальше весь код работает в CSS-пикселях
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
         if (this.renderer) {
-            this.renderer.width = maxW;
-            this.renderer.height = maxH;
-            // Сбрасываем кеш стен, т.к. размеры изменились
+            this.renderer.width = viewW;
+            this.renderer.height = viewH;
+            // Сбрасываем кеш стен/фона, т.к. размеры изменились
             this.renderer.invalidateWallCache();
         }
         if (this.menu) {
-            this.menu.width = maxW;
-            this.menu.height = maxH;
+            this.menu.width = viewW;
+            this.menu.height = viewH;
         }
     }
 
@@ -211,23 +255,35 @@ class Game {
         }
 
         if (this.state === GAME_CONSTANTS.STATES.SHOP) {
+            // Сначала проверяем глобальные кнопки меню (закрытие).
             const btn = this.menu.getButtonAt(x, y, 'shop', false);
             if (btn === 'close') {
                 this.skinShop.close();
                 this.state = this._shopReturnState || GAME_CONSTANTS.STATES.MENU;
                 return;
             }
-            const result = this.skinShop.handleClick(x, y, this.canvas.width, this.canvas.height);
-            if (result === 'close') {
-                this.skinShop.close();
-                this.state = this._shopReturnState || GAME_CONSTANTS.STATES.MENU;
+            // Затем — попадание по карточке скина (хитбоксы рисуются в menu.js).
+            // Это устраняет рассинхрон между раскладкой шопа в menu.js и старым
+            // ручным грид-расчётом в shop.handleClick (он использовал фикс. 30/80px).
+            const skinId = this.menu.getShopSkinAt(x, y);
+            if (skinId !== null && skinId >= 0 && !this.skinShop.purchaseAnimation) {
+                if (this.skinShop.isOwned(skinId)) {
+                    if (this.skinShop.activeSkinId === skinId) {
+                        this.skinShop.equipSkin(-1);
+                    } else {
+                        this.skinShop.equipSkin(skinId);
+                    }
+                } else if (this.skinShop.canBuy(skinId)) {
+                    this.skinShop.buySkin(skinId);
+                    this.skinShop.startPurchaseAnimation(skinId);
+                }
             }
             return;
         }
 
         // Тап во время игры: кнопка паузы в правом верхнем углу
         if (this.state === GAME_CONSTANTS.STATES.PLAYING) {
-            if (x > this.canvas.width - 44 && y < 55) {
+            if (x > this._viewW - 44 && y < 55) {
                 this.state = GAME_CONSTANTS.STATES.PAUSED;
             }
         }
@@ -270,8 +326,8 @@ class Game {
         this.mazeHeight = this.levelData.matrix.length;
 
         // Адаптивный размер клетки
-        const maxCellW = (this.canvas.width - 20) / this.mazeWidth;
-        const maxCellH = (this.canvas.height - 80) / this.mazeHeight;
+        const maxCellW = (this._viewW - 20) / this.mazeWidth;
+        const maxCellH = (this._viewH - 80) / this.mazeHeight;
         this.cellSize = Math.floor(Math.min(maxCellW, maxCellH, 60));
 
         this.renderer.setOffset(this.mazeWidth, this.mazeHeight, this.cellSize);
@@ -366,6 +422,7 @@ class Game {
             case GAME_CONSTANTS.STATES.LEVEL_COMPLETE:
                 this._updateLevelComplete(deltaTime);
                 this._renderPlaying();
+                this._renderLevelCompleteOverlay();
                 break;
             case GAME_CONSTANTS.STATES.PORTAL_TRANSITION:
                 this._updatePortalTransition(deltaTime);
@@ -538,10 +595,10 @@ class Game {
             this.audio.playCrystalFeverEnd && this.audio.playCrystalFeverEnd();
             if (this.crystalFever.checkMegaCollect()) {
                 this.particles.addTextPopup(
-                    this.canvas.width / 2, this.canvas.height / 2 - 30,
+                    this._viewW / 2, this._viewH / 2 - 30,
                     'МЕГА-СБОР!', '#ffb74d', 28
                 );
-                this.particles.emitLevelComplete(this.canvas.width, this.canvas.height);
+                this.particles.emitLevelComplete(this._viewW, this._viewH);
             }
         }
 
@@ -775,7 +832,7 @@ class Game {
         this.audio.playLevelComplete();
         this.player.triggerEmotion('celebrating', 2500);
         this.audio.playEmotionCelebrating();
-        this.particles.emitLevelComplete(this.canvas.width, this.canvas.height);
+        this.particles.emitLevelComplete(this._viewW, this._viewH);
         this.state = GAME_CONSTANTS.STATES.LEVEL_COMPLETE;
         this.levelCompleteTimer = 2500;
         this.storage.updateHighScore(this.player.score);
@@ -784,7 +841,7 @@ class Game {
 
         if (this.level % 10 === 0) {
             this.particles.addTextPopup(
-                this.canvas.width / 2, this.canvas.height / 2 - 50,
+                this._viewW / 2, this._viewH / 2 - 50,
                 'НЕВЕРОЯТНО!', '#ffb74d', 32
             );
         }
@@ -809,8 +866,8 @@ class Game {
             const roomData = this.bonusRoom.activate(returnPos);
             const roomMatSize = roomData.size;
             const roomCellSize = Math.floor(Math.min(
-                (this.canvas.width - 20) / roomMatSize,
-                (this.canvas.height - 80) / roomMatSize, 60
+                (this._viewW - 20) / roomMatSize,
+                (this._viewH - 80) / roomMatSize, 60
             ));
             this.renderer.setOffset(roomMatSize, roomMatSize, roomCellSize);
             this.player.resetForNewLevel(roomData.startPos, roomCellSize);
@@ -859,8 +916,8 @@ class Game {
     _exitBonusRoom() {
         this.bonusRoom.deactivate();
         const returnPos = this.bonusRoom.returnPos;
-        const maxCellW = (this.canvas.width - 20) / this.mazeWidth;
-        const maxCellH = (this.canvas.height - 80) / this.mazeHeight;
+        const maxCellW = (this._viewW - 20) / this.mazeWidth;
+        const maxCellH = (this._viewH - 80) / this.mazeHeight;
         this.cellSize = Math.floor(Math.min(maxCellW, maxCellH, 60));
         this.renderer.setOffset(this.mazeWidth, this.mazeHeight, this.cellSize);
         this.player.resetForNewLevel(returnPos, this.cellSize);
@@ -896,6 +953,40 @@ class Game {
         );
     }
 
+    // Лёгкий оверлей с поздравлением поверх анимации победы — чтобы экран
+    // завершения уровня выглядел законченным. Затухает как и levelCompleteTimer.
+    _renderLevelCompleteOverlay() {
+        const ctx = this.ctx;
+        const w = this._viewW;
+        const h = this._viewH;
+        // Прогресс затухания: к концу таймера полностью прозрачен,
+        // в начале — мягкий тёмный затемняющий слой.
+        const total = 2500;
+        const t = Math.max(0, Math.min(1, this.levelCompleteTimer / total));
+        const alpha = t * 0.45;
+        ctx.save();
+        ctx.fillStyle = `rgba(15, 10, 34, ${alpha})`;
+        ctx.fillRect(0, 0, w, h);
+
+        // Центральная плашка с поздравлением (без размытия)
+        const fontStack = '"Nunito", "Quicksand", system-ui, -apple-system, sans-serif';
+        ctx.globalAlpha = t;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `bold 36px ${fontStack}`;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fillText('Уровень пройден!', w / 2 + 2, h / 2 - 18);
+        ctx.fillStyle = '#FFD49B';
+        ctx.fillText('Уровень пройден!', w / 2, h / 2 - 20);
+
+        ctx.font = `bold 18px ${fontStack}`;
+        ctx.fillStyle = '#F0EAFB';
+        ctx.fillText(`+${GAME_CONSTANTS.SCORING.LEVEL_BONUS * this.level} очков`, w / 2, h / 2 + 18);
+        ctx.textBaseline = 'alphabetic';
+        ctx.textAlign = 'left';
+        ctx.restore();
+    }
+
     // === РЕНДЕР ИГРОВОГО ПРОЦЕССА ===
     _renderPlaying() {
         const time = performance.now();
@@ -924,7 +1015,7 @@ class Game {
         this.ghostWalls.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
         this.crystalRunners.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
         this.magicFlowers.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
-        this.crystalFever.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time, this.canvas.width, this.canvas.height);
+        this.crystalFever.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time, this._viewW, this._viewH);
 
         this.renderer.drawEnemies(this.enemyManager.enemies);
 
@@ -946,7 +1037,7 @@ class Game {
         this.fogLevel.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, this.levelData.matrix);
 
         // Кнопка паузы (минималистичная — скруглённый квадратик с двумя полосками)
-        this.renderer.drawPauseButton(this.canvas.width - 22, 27, 14);
+        this.renderer.drawPauseButton(this._viewW - 22, 27, 14);
 
         if (shake.x !== 0 || shake.y !== 0) this.ctx.restore();
 

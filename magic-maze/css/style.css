@@ -1,7 +1,6 @@
-/* Файл: magic-maze/css/style.css */
-/* Минималистичный детский стиль: мягкие кремовые тона, без неоновых теней.
-   touch-action: none — гарантирует, что браузер не перехватит свайпы (важно для отзывчивости).
-*/
+/* Файл: magic-maze/css/style.css
+   Тёмная уютная тема: глубокий индиго/фиолетовый фон, мягкие светлые акценты.
+   touch-action: none — гарантирует, что браузер не перехватит свайпы. */
 
 * {
     margin: 0;
@@ -13,10 +12,15 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    /* Нежно-кремовый фон под canvas — продолжает палитру меню */
-    background-color: #FFF8F0;
-    font-family: "Comic Sans MS", "Marker Felt", system-ui, -apple-system, sans-serif;
-    color: #5C4438;
+    /* Глубокий индиго под canvas — продолжает тёмную палитру меню */
+    background-color: #0F0A22;
+    font-family: "Nunito", "Quicksand", "Comic Sans MS", "Marker Felt",
+                 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #E8E0F5;
+    /* Чёткая отрисовка текста (без размытия) */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
 }
 
 body {
@@ -24,7 +28,7 @@ body {
     justify-content: center;
     align-items: center;
     min-height: 100vh;
-    /* Запрет любых жестов браузера на canvas — ключ к мгновенной отзывчивости.
+    /* Запрет жестов браузера на canvas — ключ к мгновенной отзывчивости.
        Без этого Chrome/Safari могут добавить ~300ms задержку на double-tap. */
     touch-action: none;
     -webkit-touch-callout: none;
@@ -37,35 +41,26 @@ body {
 
 #gameCanvas {
     display: block;
-    max-width: 500px;
-    max-height: 700px;
-    width: 100vw;
-    height: 100vh;
+    /* Размеры устанавливает JS (resizeCanvas) с учётом DPR — это
+       главное, что устраняет размытие текста на мобильных. CSS даёт
+       только верхнюю границу, без принудительного растяжения. */
+    max-width: 100vw;
+    max-height: 100vh;
     border-radius: 16px;
-    /* Мягкая тень в духе нового меню — без неоновых эффектов */
-    box-shadow: 0 4px 20px rgba(92, 68, 56, 0.12);
-    /* Запрет выделения на canvas */
+    /* Мягкая тень под тёмное меню */
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
     -webkit-user-select: none;
     user-select: none;
-    /* Отключаем стандартные жесты на самом canvas */
     touch-action: none;
+    /* Не позволяем браузеру масштабировать рисунок — рендерим в нативном
+       разрешении, чтобы шрифты были чёткими */
+    image-rendering: auto;
 }
 
-/* Адаптивность: на узких экранах canvas занимает всё */
+/* На мобильных canvas заполняет всё, без скруглений и теней */
 @media (max-width: 520px) {
     #gameCanvas {
-        width: 100vw;
-        height: 100vh;
-        max-width: 100vw;
-        max-height: 100vh;
         border-radius: 0;
         box-shadow: none;
-    }
-}
-
-@media (orientation: landscape) and (max-height: 500px) {
-    #gameCanvas {
-        height: 100vh;
-        width: auto;
     }
 }

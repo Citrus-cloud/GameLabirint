@@ -277,8 +277,12 @@ class CrystalFeverSystem {
     // но визуально не показываются — игроку проще ориентироваться).
     _renderFeverCrystals(ctx, offsetX, offsetY, time) {
         const cs = this.cellSize;
-        const canvasW = ctx.canvas.width;
-        const canvasH = ctx.canvas.height;
+        // Используем CSS-размеры (после setTransform(dpr,...) ctx.canvas.width
+        // в физических пикселях, нам нужны логические — берём из transform).
+        const t = ctx.getTransform ? ctx.getTransform() : null;
+        const dpr = t ? t.a : 1;
+        const canvasW = ctx.canvas.width / dpr;
+        const canvasH = ctx.canvas.height / dpr;
         let visibleCount = 0;
         const halfSize = cs * 0.18;
 

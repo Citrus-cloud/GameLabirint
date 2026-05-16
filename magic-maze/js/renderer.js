@@ -948,30 +948,40 @@ class Renderer {
     }
 
     // === UI ===
+    // Чёткая отрисовка текста (без shadowBlur — это и было причиной «мутности»).
     drawUI(lives, score, level, activePower, powerTimer, powerMaxTimer, time) {
         const ctx = this.ctx;
         const wobble = Math.sin(time / GAME_CONSTANTS.ANIMATIONS.UI_WOBBLE_SPEED * Math.PI * 2);
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        // Мягкая полупрозрачная подложка (тёмная — гармонирует с меню)
+        const grad = ctx.createLinearGradient(0, 0, 0, 55);
+        grad.addColorStop(0, 'rgba(15, 10, 34, 0.85)');
+        grad.addColorStop(1, 'rgba(15, 10, 34, 0.55)');
+        ctx.fillStyle = grad;
         ctx.fillRect(0, 0, this.width, 55);
+        // Тонкая разделительная линия
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.fillRect(0, 55, this.width, 1);
+
         for (let i = 0; i < GAME_CONSTANTS.PLAYER.LIVES; i++) {
             const hx = 20 + i * 28;
             const hy = 27 + wobble * (i % 2 === 0 ? 1 : -1);
             this._drawHeart(hx, hy, 10, i < lives);
         }
-        ctx.font = 'bold 18px Arial';
-        ctx.fillStyle = GAME_CONSTANTS.COLORS.UI_TEXT;
+        const fontStack = '"Nunito", "Quicksand", system-ui, -apple-system, sans-serif';
+        ctx.font = `bold 18px ${fontStack}`;
+        ctx.fillStyle = '#F0EAFB';
         ctx.textAlign = 'center';
         ctx.fillText(`Уровень ${level}`, this.width / 2, 32);
-        ctx.font = 'bold 16px Arial';
-        ctx.fillStyle = GAME_CONSTANTS.COLORS.UI_SCORE;
+        ctx.font = `bold 16px ${fontStack}`;
+        ctx.fillStyle = '#FFD27A';
         ctx.textAlign = 'right';
-        ctx.fillText(`★ ${score}`, this.width - 15, 32);
+        ctx.fillText(`★ ${score}`, this.width - 50, 32);
         if (activePower && powerTimer > 0) {
-            const progress = powerTimer / powerMaxTimer;
+            const progress = Math.max(0, Math.min(1, powerTimer / powerMaxTimer));
             const barWidth = 80;
             const barX = this.width / 2 - barWidth / 2;
             const barY = 42;
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
             ctx.fillRect(barX, barY, barWidth, 6);
             let barColor;
             switch (activePower) {
@@ -1002,19 +1012,24 @@ class Renderer {
     }
 
     drawPauseButton(x, y, size) {
-        // Минималистичная мягкая кнопка паузы — белый кружок с тенью
+        // Минималистичная кнопка паузы — тёмная подложка с лёгким светлым ободком
         const ctx = this.ctx;
         ctx.save();
-        ctx.shadowColor = 'rgba(92, 68, 56, 0.2)';
-        ctx.shadowBlur = 4;
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+        ctx.shadowBlur = 6;
         ctx.shadowOffsetY = 2;
-        ctx.fillStyle = '#FFFFFF';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
         ctx.beginPath();
         ctx.arc(x, y, size, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
-        // Две полосочки тёплого коричневого
-        ctx.fillStyle = '#5C4438';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.stroke();
+        // Две полосочки светлого
+        ctx.fillStyle = '#F0EAFB';
         const w = size * 0.18;
         const h = size * 0.7;
         ctx.fillRect(x - size * 0.32, y - h / 2, w, h);
@@ -1035,22 +1050,27 @@ class Renderer {
     }
 
     drawLevelIntro(level, progress) {
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.BACKGROUND;
+        // Тёмный фон + крупный чёткий текст со смещённой тенью (без блюра)
+        const grad = this.ctx.createLinearGradient(0, 0, 0, this.height);
+        grad.addColorStop(0, '#1A1238');
+        grad.addColorStop(1, '#0F0A22');
+        this.ctx.fillStyle = grad;
         this.ctx.fillRect(0, 0, this.width, this.height);
         const scale = 0.5 + progress * 0.5;
         const alpha = progress < 0.8 ? 1 : 1 - (progress - 0.8) / 0.2;
         this.ctx.globalAlpha = alpha;
-        this.ctx.font = `bold ${60 * scale}px Arial`;
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.STAR_PRIMARY;
+        const fontStack = '"Nunito", "Quicksand", system-ui, -apple-system, sans-serif';
+        this.ctx.font = `bold ${Math.round(48 * scale)}px ${fontStack}`;
         this.ctx.textAlign = 'center';
-        this.ctx.shadowColor = GAME_CONSTANTS.COLORS.STAR_GLOW;
-        this.ctx.shadowBlur = 15;
+        // Смещённая тень вместо размытого свечения
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        this.ctx.fillText(`Уровень ${level}`, this.width / 2 + 2, this.height / 2 + 3);
+        this.ctx.fillStyle = '#FFD49B';
         this.ctx.fillText(`Уровень ${level}`, this.width / 2, this.height / 2);
-        this.ctx.shadowBlur = 0;
         if (level % 10 === 0) {
-            this.ctx.font = '20px Arial';
-            this.ctx.fillStyle = '#ff4444';
-            this.ctx.fillText('⚔ Хранитель ждёт! ⚔', this.width / 2, this.height / 2 + 50);
+            this.ctx.font = `bold 18px ${fontStack}`;
+            this.ctx.fillStyle = '#B5A6D8';
+            this.ctx.fillText('Хранитель ждёт!', this.width / 2, this.height / 2 + 50);
         }
         this.ctx.globalAlpha = 1;
         this.ctx.textAlign = 'left';
