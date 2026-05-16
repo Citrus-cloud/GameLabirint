@@ -9,9 +9,9 @@ class AudioManager {
         this.enabled = true;
         this.initialized = false;
 
-        // Оптимизация: ограничение количества одновременных звуков
+        // Лимит одновременно активных звуков (по ТЗ — не более 4).
         this._activeSounds = 0;
-        this._maxConcurrentSounds = 8; // Максимум 8 одновременных звуков
+        this._maxConcurrentSounds = 4;
 
         // Кешированные буферы шума (создаются один раз)
         this._noiseBufferShort = null; // 0.2с
@@ -26,7 +26,7 @@ class AudioManager {
             // Создаём буферы шума один раз
             this._createNoiseBuffers();
         } catch (e) {
-            console.warn('Web Audio API не поддерживается:', e);
+            // Web Audio API недоступен — отключаем звук молча
             this.enabled = false;
         }
     }

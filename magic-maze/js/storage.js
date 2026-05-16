@@ -17,7 +17,6 @@ class GameStorage {
             localStorage.setItem(this.storageKey, JSON.stringify(saveData));
             return true;
         } catch (e) {
-            console.warn('Не удалось сохранить прогресс:', e);
             return false;
         }
     }
@@ -29,9 +28,7 @@ class GameStorage {
             if (data) {
                 return JSON.parse(data);
             }
-        } catch (e) {
-            console.warn('Не удалось загрузить прогресс:', e);
-        }
+        } catch (e) {}
         return null;
     }
 
@@ -71,9 +68,7 @@ class GameStorage {
     clear() {
         try {
             localStorage.removeItem(this.storageKey);
-        } catch (e) {
-            console.warn('Не удалось удалить сохранение:', e);
-        }
+        } catch (e) {}
     }
 
     // Получить рекорд
