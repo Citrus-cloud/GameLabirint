@@ -19,6 +19,14 @@ class Game {
         this.skinEffects = new SkinEffectsSystem(); // Система эффектов скинов
         this.lightning = new LightningSystem(); // Система молний
 
+        // === НОВЫЕ МЕХАНИКИ ===
+        this.crystalRunners = new CrystalRunnerManager(); // Кристалл-непоседа
+        this.ghostWalls = new GhostWallSystem();          // Призрачные стены
+        this.lineLightning = new LineLightningSystem();   // Линейная молния
+        this.magicFlowers = new MagicFlowerManager();     // Волшебный цветок-таймер
+        this.fogLevel = new FogLevelSystem();             // Туманный уровень
+        this.crystalFever = new CrystalFeverSystem();     // Кристальная лихорадка
+
         // Состояние
         this.state = GAME_CONSTANTS.STATES.MENU;
         this.level = 1;
@@ -298,6 +306,52 @@ class Game {
             this.levelData.finishPos
         );
 
+        // === ИНИЦИАЛИЗАЦИЯ НОВЫХ МЕХАНИК ===
+        // Кристалл-непоседа (с 3 уровня)
+        this.crystalRunners.init(
+            this.level,
+            this.levelData.matrix,
+            this.cellSize,
+            this.levelData.startPos,
+            this.levelData.finishPos,
+            this.crystals
+        );
+
+        // Призрачные стены (с 6 уровня)
+        this.ghostWalls.init(
+            this.level,
+            this.levelData.matrix,
+            this.levelData.startPos,
+            this.levelData.finishPos,
+            this.cellSize
+        );
+
+        // Линейная молния (с 7 уровня)
+        this.lineLightning.init(this.level);
+
+        // Волшебный цветок-таймер (с 4 уровня)
+        this.magicFlowers.init(
+            this.level,
+            this.levelData.matrix,
+            this.cellSize,
+            this.levelData.startPos,
+            this.levelData.finishPos
+        );
+
+        // Туманный уровень (каждый 7-й)
+        this.fogLevel.init(
+            this.level,
+            this.mazeWidth,
+            this.mazeHeight,
+            this.cellSize
+        );
+        if (this.fogLevel.active) {
+            this.audio.playFogAmbient();
+        }
+
+        // Кристальная лихорадка (1/12 шанс с 2 уровня)
+        this.crystalFever.init(this.level, this.levelData.matrix, this.cellSize);
+
         // Сброс эффектов скинов
         this.skinEffects.reset();
 
@@ -457,8 +511,41 @@ class Game {
                     this.lightningChargeSound.stop();
                     this.lightningChargeSound = null;
                 }
-                // Звук удара
-                this.audio.playLightningStrike();
+                
+                // Проверяем: линейная молния? (30% шанс с 7 уровня)
+                const isLine = this.lineLightning.shouldBeLineStrike();
+                
+                if (isLine && this.lightning.targetX >= 0) {
+                    // Линейная молния!
+                    this.audio.playLineLightningStrike();
+                    const targets = this.lineLightning.calculateLineTargets(
+                        this.lightning.targetX, this.lightning.targetY,
+                        this.lightning.lastDirection, this.levelData.matrix
+                    );
+                    this.lineLightning.generateLineBolt(this.cellSize, this.renderer.offsetX, this.renderer.offsetY);
+                    this.lineLightning.generateLineSparks(this.cellSize);
+                    
+                    // Проверка попадания по игроку (любая из клеток линии)
+                    if (this.lineLightning.checkHit(this.player.gridX, this.player.gridY)) {
+                        const damaged = this.player.takeDamage(1);
+                        if (damaged) {
+                            this.audio.playDamage();
+                            this.player.triggerEmotion('scared', 1200);
+                            this.audio.playEmotionScared();
+                            this.particles.emitDamage(
+                                this.renderer.offsetX + this.player.pixelX + this.cellSize / 2,
+                                this.renderer.offsetY + this.player.pixelY + this.cellSize / 2
+                            );
+                            if (this.player.lives <= 0) {
+                                this.player.triggerEmotion('sad', 2000);
+                                this.audio.playEmotionSad();
+                                this._gameOver();
+                            }
+                        }
+                    }
+                } else {
+                    // Обычный удар молнии
+                    this.audio.playLightningStrike();
                 
                 // Проверяем попадания
                 const strikeResult = this.lightning.checkStrike(
@@ -496,12 +583,60 @@ class Game {
                         strikeResult.hitCrystal.collected = true;
                     }
                 }
+                } // Закрытие else (обычная молния)
             }
         }
 
         // Улучшение 3: звук зевоты при бездействии
         if (this.player.emotionState === 'idle' && this.player.emotionTimer > 1900) {
             this.audio.playEmotionIdle();
+        }
+
+        // === ОБНОВЛЕНИЕ НОВЫХ МЕХАНИК ===
+        // Кристалл-непоседа
+        this.crystalRunners.update(deltaTime, this.player.gridX, this.player.gridY, this.levelData.matrix);
+
+        // Призрачные стены
+        this.ghostWalls.update(deltaTime, time, this.levelData.matrix, this.player);
+
+        // Линейная молния
+        this.lineLightning.update(deltaTime);
+
+        // Волшебный цветок-таймер
+        this.magicFlowers.update(deltaTime);
+        // Проверка увядших цветков (порождают тень)
+        const shadowSpawn = this.magicFlowers.checkShadowSpawn();
+        if (shadowSpawn) {
+            // Добавляем нового врага-тень на месте увядшего цветка
+            const newEnemy = new Enemy({
+                startPos: shadowSpawn,
+                patrolRoute: [shadowSpawn],
+                isGuardian: false
+            }, this.level, this.cellSize);
+            this.enemyManager.enemies.push(newEnemy);
+            this.audio.playFlowerWilt();
+        }
+
+        // Туманный уровень
+        this.fogLevel.update(deltaTime, this.player.gridX, this.player.gridY);
+
+        // Кристальная лихорадка
+        const prevFeverActive = this.crystalFever.active;
+        this.crystalFever.update(deltaTime, this.player.gridX, this.player.gridY);
+        // Звук начала/конца лихорадки
+        if (!prevFeverActive && this.crystalFever.active) {
+            this.audio.playCrystalFeverStart();
+        }
+        if (prevFeverActive && !this.crystalFever.active) {
+            this.audio.playCrystalFeverEnd();
+            // Проверка МЕГА-СБОР
+            if (this.crystalFever.checkMegaCollect()) {
+                this.particles.addTextPopup(
+                    this.canvas.width / 2, this.canvas.height / 2 - 30,
+                    'МЕГА-СБОР!', '#ffd700', 28
+                );
+                this.particles.emitLevelComplete(this.canvas.width, this.canvas.height);
+            }
         }
 
         // Проверка столкновений (только когда не двигается)
@@ -547,7 +682,10 @@ class Game {
                 w.isBlocking && w.pos.x === newX && w.pos.y === newY
             );
 
-            if (!blockedByWall) {
+            // Проверка призрачной стены
+            const blockedByGhost = this.ghostWalls.isBlocked(newX, newY);
+
+            if (!blockedByWall && !blockedByGhost) {
                 this.player.moveTo(newX, newY);
                 this.audio.playMove();
                 // Обновляем направление для системы молний
@@ -672,6 +810,84 @@ class Game {
             px === this.levelData.finishPos.x && py === this.levelData.finishPos.y) {
             this._levelComplete();
         }
+
+        // === СТОЛКНОВЕНИЯ НОВЫХ МЕХАНИК ===
+        // Кристалл-непоседа
+        const caughtRunner = this.crystalRunners.checkCollection(px, py);
+        if (caughtRunner) {
+            this.player.addScore(caughtRunner.points);
+            this.skinShop.addCrystals(caughtRunner.points);
+            this.audio.playCrystalRunnerCatch();
+            this.player.triggerEmotion('celebrating', 1500);
+            // Фейерверк из золотых и розовых частиц
+            for (let i = 0; i < 20; i++) {
+                const angle = (Math.PI * 2 / 20) * i;
+                const speed = 2 + Math.random() * 4;
+                const color = Math.random() < 0.5 ? '#ffd700' : '#ff69b4';
+                this.particles.particles.push({
+                    x: this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
+                    y: this.renderer.offsetY + py * this.cellSize + this.cellSize / 2,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    life: 800, maxLife: 800,
+                    size: 3 + Math.random() * 4,
+                    color: color, alpha: 1,
+                    gravity: 0.08, shrink: 0.97, type: 'star',
+                    rotation: 0, rotationSpeed: (Math.random() - 0.5) * 0.2
+                });
+            }
+            this.particles.addTextPopup(
+                this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
+                this.renderer.offsetY + py * this.cellSize,
+                `+${caughtRunner.points}`, '#ffd700', 20
+            );
+        }
+
+        // Волшебный цветок
+        const flowerReward = this.magicFlowers.checkCollection(px, py);
+        if (flowerReward) {
+            this.audio.playFlowerCollect();
+            this.player.triggerEmotion('happy', 1200);
+            
+            switch (flowerReward.type) {
+                case 'crystals':
+                    const amount = flowerReward.amount * GAME_CONSTANTS.SCORING.CRYSTAL_POINTS;
+                    this.player.addScore(amount);
+                    this.skinShop.addCrystals(amount);
+                    this.particles.addTextPopup(
+                        this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
+                        this.renderer.offsetY + py * this.cellSize,
+                        `+${amount}`, '#ffd700', 18
+                    );
+                    break;
+                case 'power':
+                    this.player.activatePower(flowerReward.power);
+                    this.activePowerEffect = new ActivePowerEffect(flowerReward.power, this.player.powerTimer);
+                    if (flowerReward.power === 'freeze') {
+                        this.enemyManager.freezeAll(GAME_CONSTANTS.POWERS.FREEZE_DURATION);
+                    }
+                    break;
+                case 'life':
+                    this.player.lives = Math.min(this.player.lives + 1, GAME_CONSTANTS.PLAYER.LIVES);
+                    this.particles.addTextPopup(
+                        this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
+                        this.renderer.offsetY + py * this.cellSize,
+                        '+1 ❤', '#f44336', 20
+                    );
+                    break;
+            }
+        }
+
+        // Кристальная лихорадка — сбор кристаллов
+        if (this.crystalFever.active && this.crystalFever.collectCrystal(px, py)) {
+            this.player.addScore(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
+            this.skinShop.addCrystals(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
+            this.audio.playCrystalCollect();
+            this.particles.emitCrystalCollect(
+                this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
+                this.renderer.offsetY + py * this.cellSize + this.cellSize / 2
+            );
+        }
     }
 
     // === ЭФФЕКТ МАГНИТА ===
@@ -720,6 +936,11 @@ class Game {
         this.state = GAME_CONSTANTS.STATES.LEVEL_COMPLETE;
         this.levelCompleteTimer = 2500;
         this.storage.updateHighScore(this.player.score);
+
+        // Рассеивание тумана при завершении уровня
+        if (this.fogLevel.active) {
+            this.fogLevel.startFadeOut();
+        }
 
         // Мини-поздравление каждые 10 уровней
         if (this.level % 10 === 0) {
@@ -893,6 +1114,19 @@ class Game {
         // Усиления
         this.renderer.drawPowerUps(this.powerUpManager.getActive());
 
+        // === ОТРИСОВКА НОВЫХ МЕХАНИК ===
+        // Призрачные стены
+        this.ghostWalls.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
+
+        // Кристаллы-непоседы
+        this.crystalRunners.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
+
+        // Волшебные цветки
+        this.magicFlowers.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
+
+        // Кристальная лихорадка
+        this.crystalFever.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time, this.canvas.width, this.canvas.height);
+
         // Враги
         this.renderer.drawEnemies(this.enemyManager.enemies);
 
@@ -924,6 +1158,9 @@ class Game {
             time
         );
 
+        // Туман (поверх игрового мира, но под UI)
+        this.fogLevel.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, this.levelData.matrix);
+
         // Кнопка паузы
         this.renderer.drawPauseButton(this.canvas.width - 22, 27, 14);
 
@@ -934,6 +1171,17 @@ class Game {
 
         // МОЛНИЯ — рисуется ПОВЕРХ ВСЕГО (включая UI), вне дрожания
         this.renderer.drawLightning(this.lightning);
+        
+        // Линейная молния (поверх обычной)
+        if (this.lineLightning.isLineStrike) {
+            // Индикация зарядки линейных целей
+            if (this.lightning.isCharging() && this.lineLightning.lineTargets.length > 0) {
+                const progress = this.lightning.chargeTimer / this.lightning.chargeMaxTime;
+                this.lineLightning.renderCharging(this.ctx, this.renderer.offsetX, this.renderer.offsetY, this.cellSize, progress, this.lightning.pulsePhase);
+            }
+            this.lineLightning.renderBolt(this.ctx, this.renderer.offsetX, this.renderer.offsetY);
+            this.lineLightning.renderSparks(this.ctx, this.renderer.offsetX, this.renderer.offsetY);
+        }
     }
 
     // === Улучшение 1: ОБНОВЛЕНИЕ И РЕНДЕР МАГАЗИНА ===

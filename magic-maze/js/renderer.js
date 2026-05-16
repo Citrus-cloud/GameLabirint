@@ -170,139 +170,14 @@ class Renderer {
             this.ctx.globalAlpha = skin.transparency;
         }
 
-        // Тело (овал) с squash/stretch
-        this.ctx.beginPath();
-        this.ctx.ellipse(px, drawY, size * squash, size * 1.1 * stretch, 0, 0, Math.PI * 2);
-        this.ctx.fillStyle = bodyColor;
-        this.ctx.fill();
-
-        // Животик
-        this.ctx.beginPath();
-        this.ctx.ellipse(px, drawY + size * 0.3, size * 0.5 * squash, size * 0.5 * stretch, 0, 0, Math.PI * 2);
-        this.ctx.fillStyle = bellyColor;
-        this.ctx.fill();
-
-        // Ушки (с углом от эмоций)
-        const earAngle = player.emotionEarAngle || 0;
-        const earSize = size * 0.5;
-        
-        this.ctx.save();
-        this.ctx.translate(px - size * 0.3, drawY - size * 0.7);
-        this.ctx.rotate(earAngle);
-        this.ctx.beginPath();
-        this.ctx.moveTo(-size * 0.3, 0);
-        this.ctx.lineTo(0, -size * 0.6);
-        this.ctx.lineTo(size * 0.3, 0);
-        this.ctx.fillStyle = earsColor;
-        this.ctx.fill();
-        this.ctx.restore();
-
-        this.ctx.save();
-        this.ctx.translate(px + size * 0.3, drawY - size * 0.7);
-        this.ctx.rotate(-earAngle);
-        this.ctx.beginPath();
-        this.ctx.moveTo(-size * 0.3, 0);
-        this.ctx.lineTo(0, -size * 0.6);
-        this.ctx.lineTo(size * 0.3, 0);
-        this.ctx.fillStyle = earsColor;
-        this.ctx.fill();
-        this.ctx.restore();
-
-        // Глаза (масштаб от эмоций)
-        const eyeScale = player.emotionEyeScale || 1;
-        const eyeOffsetX = size * 0.25;
-        const eyeY = drawY - size * 0.2;
-        const eyeRadius = size * 0.15 * eyeScale;
-
-        // Улучшение 3: звёздочки в глазах при радости
-        if (player.emotionState === 'happy' || player.emotionState === 'celebrating') {
-            // Глаза-звёздочки
-            this.ctx.fillStyle = '#2c2c2c';
-            this.ctx.beginPath();
-            this.ctx.arc(px - eyeOffsetX, eyeY, eyeRadius, 0, Math.PI * 2);
-            this.ctx.arc(px + eyeOffsetX, eyeY, eyeRadius, 0, Math.PI * 2);
-            this.ctx.fill();
-            
-            // Звёздные блики
-            this.ctx.fillStyle = '#ffd700';
-            this._drawStar(px - eyeOffsetX, eyeY, eyeRadius * 0.6, 4);
-            this._drawStar(px + eyeOffsetX, eyeY, eyeRadius * 0.6, 4);
-        } else if (player.emotionState === 'scared') {
-            // Большие испуганные глаза
-            this.ctx.fillStyle = '#ffffff';
-            this.ctx.beginPath();
-            this.ctx.arc(px - eyeOffsetX, eyeY, eyeRadius * 1.2, 0, Math.PI * 2);
-            this.ctx.arc(px + eyeOffsetX, eyeY, eyeRadius * 1.2, 0, Math.PI * 2);
-            this.ctx.fill();
-            this.ctx.fillStyle = '#2c2c2c';
-            this.ctx.beginPath();
-            this.ctx.arc(px - eyeOffsetX, eyeY + 1, eyeRadius * 0.7, 0, Math.PI * 2);
-            this.ctx.arc(px + eyeOffsetX, eyeY + 1, eyeRadius * 0.7, 0, Math.PI * 2);
-            this.ctx.fill();
-        } else if (player.emotionState === 'sad') {
-            // Грустные глаза (полукруги)
-            this.ctx.strokeStyle = '#2c2c2c';
-            this.ctx.lineWidth = 2;
-            this.ctx.beginPath();
-            this.ctx.arc(px - eyeOffsetX, eyeY, eyeRadius * 0.8, 0, Math.PI);
-            this.ctx.stroke();
-            this.ctx.beginPath();
-            this.ctx.arc(px + eyeOffsetX, eyeY, eyeRadius * 0.8, 0, Math.PI);
-            this.ctx.stroke();
-        } else if (player.emotionState === 'idle') {
-            // Прищуренные глаза (зевота)
-            this.ctx.strokeStyle = '#2c2c2c';
-            this.ctx.lineWidth = 2.5;
-            this.ctx.beginPath();
-            this.ctx.moveTo(px - eyeOffsetX - eyeRadius * 0.6, eyeY);
-            this.ctx.lineTo(px - eyeOffsetX + eyeRadius * 0.6, eyeY);
-            this.ctx.stroke();
-            this.ctx.beginPath();
-            this.ctx.moveTo(px + eyeOffsetX - eyeRadius * 0.6, eyeY);
-            this.ctx.lineTo(px + eyeOffsetX + eyeRadius * 0.6, eyeY);
-            this.ctx.stroke();
-        } else {
-            // Обычные глаза
-            this.ctx.beginPath();
-            this.ctx.arc(px - eyeOffsetX, eyeY, size * 0.15, 0, Math.PI * 2);
-            this.ctx.arc(px + eyeOffsetX, eyeY, size * 0.15, 0, Math.PI * 2);
-            this.ctx.fillStyle = '#2c2c2c';
-            this.ctx.fill();
-
-            // Блики в глазах
-            this.ctx.beginPath();
-            this.ctx.arc(px - eyeOffsetX + 2, eyeY - 2, size * 0.06, 0, Math.PI * 2);
-            this.ctx.arc(px + eyeOffsetX + 2, eyeY - 2, size * 0.06, 0, Math.PI * 2);
-            this.ctx.fillStyle = '#ffffff';
-            this.ctx.fill();
-        }
-
-        // Нос
-        this.ctx.beginPath();
-        this.ctx.arc(px, drawY + size * 0.05, size * 0.1, 0, Math.PI * 2);
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.FOXY_NOSE;
-        this.ctx.fill();
-
-        // Улучшение 3: рот в зависимости от эмоции
-        const mouthState = player.emotionMouthState || 'normal';
-        this._drawFoxyMouth(px, drawY, size, mouthState, player.emotionIntensity);
-
-        // Хвостик (безвольный при грусти)
-        this.ctx.save();
-        const tailX = px - size * 0.8;
-        this.ctx.translate(tailX, drawY + size * 0.2);
-        const tailAngle = player.emotionState === 'sad' ? 0.5 : player.tailAngle;
-        this.ctx.rotate(tailAngle);
-        this.ctx.beginPath();
-        this.ctx.ellipse(0, 0, size * 0.6, size * 0.25, -0.3, 0, Math.PI * 2);
-        this.ctx.fillStyle = tailColor;
-        this.ctx.fill();
-        // Кончик хвоста
-        this.ctx.beginPath();
-        this.ctx.ellipse(-size * 0.4, 0, size * 0.2, size * 0.15, 0, 0, Math.PI * 2);
-        this.ctx.fillStyle = bellyColor;
-        this.ctx.fill();
-        this.ctx.restore();
+        // === ВЫЗОВ ДЕТАЛИЗИРОВАННОЙ ОТРИСОВКИ ===
+        const skinData = {
+            bodyColor: bodyColor,
+            bellyColor: bellyColor,
+            tailColor: tailColor,
+            earsColor: earsColor
+        };
+        this.drawDetailedFox(px, drawY, size, skinData, player);
 
         this.ctx.shadowBlur = 0;
         this.ctx.restore();
@@ -393,6 +268,368 @@ class Renderer {
     }
 
 
+
+    // === УЛУЧШЕННАЯ ДЕТАЛИЗИРОВАННАЯ ОТРИСОВКА ЛИСЁНКА ===
+    // Вызывается из drawPlayer вместо старой простой отрисовки
+    drawDetailedFox(px, drawY, size, skinData, player) {
+        const ctx = this.ctx;
+        const cs = this.cellSize;
+        const time = performance.now();
+        
+        // Параметры эмоций
+        const squash = player.emotionSquash || 1;
+        const stretch = player.emotionStretch || 1;
+        const earAngle = player.emotionEarAngle || 0;
+        const tailAngle = player.emotionState === 'sad' ? 0.5 : (player.tailAngle || 0);
+        
+        // Цвета (из скина или стандартные)
+        const bodyColor = skinData.bodyColor;
+        const bellyColor = skinData.bellyColor;
+        const tailColor = skinData.tailColor;
+        const earsColor = skinData.earsColor;
+        
+        // === ХВОСТ (рисуется первым, за телом) ===
+        ctx.save();
+        const tailBaseX = px - size * 0.6;
+        const tailBaseY = drawY + size * 0.4;
+        ctx.translate(tailBaseX, tailBaseY);
+        ctx.rotate(tailAngle);
+        
+        // Пушистый хвост — изогнутая форма с волнистым краем
+        ctx.beginPath();
+        // Основная форма хвоста (безье для изгиба)
+        ctx.moveTo(0, 0);
+        ctx.bezierCurveTo(-size * 0.3, -size * 0.4, -size * 0.8, -size * 0.5, -size * 0.9, -size * 0.1);
+        ctx.bezierCurveTo(-size * 1.0, size * 0.1, -size * 0.7, size * 0.3, -size * 0.3, size * 0.15);
+        ctx.bezierCurveTo(-size * 0.1, size * 0.1, 0, size * 0.05, 0, 0);
+        
+        // Градиент хвоста
+        const tailGrad = ctx.createLinearGradient(0, 0, -size * 0.9, 0);
+        tailGrad.addColorStop(0, tailColor);
+        tailGrad.addColorStop(0.7, tailColor);
+        tailGrad.addColorStop(1, bellyColor); // Белый кончик
+        ctx.fillStyle = tailGrad;
+        ctx.fill();
+        
+        // Волнистые линии по краю (имитация шерсти)
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 0.8;
+        for (let i = 0; i < 5; i++) {
+            const t = i / 5;
+            const wx = -size * 0.9 * t;
+            const wy = -size * 0.3 * Math.sin(t * Math.PI) + Math.sin(time * 0.003 + i) * 1.5;
+            ctx.beginPath();
+            ctx.arc(wx, wy, 2, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.restore();
+        
+        // === ЗАДНИЕ ЛАПКИ ===
+        const legBounce = player.isMoving ? Math.sin(time * 0.015) * 2 : 0;
+        
+        // Левая задняя лапка
+        ctx.fillStyle = bodyColor;
+        ctx.beginPath();
+        ctx.ellipse(px - size * 0.35, drawY + size * 0.85 + legBounce, size * 0.18 * squash, size * 0.22 * stretch, 0.1, 0, Math.PI * 2);
+        ctx.fill();
+        // Пальчики
+        ctx.fillStyle = bellyColor;
+        for (let i = 0; i < 3; i++) {
+            ctx.beginPath();
+            ctx.arc(px - size * 0.4 + i * size * 0.06, drawY + size * 1.05 + legBounce, size * 0.04, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Правая задняя лапка
+        ctx.fillStyle = bodyColor;
+        ctx.beginPath();
+        ctx.ellipse(px + size * 0.35, drawY + size * 0.85 - legBounce, size * 0.18 * squash, size * 0.22 * stretch, -0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = bellyColor;
+        for (let i = 0; i < 3; i++) {
+            ctx.beginPath();
+            ctx.arc(px + size * 0.28 + i * size * 0.06, drawY + size * 1.05 - legBounce, size * 0.04, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // === ТУЛОВИЩЕ (овальное, с градиентом) ===
+        const bodyGrad = ctx.createRadialGradient(px, drawY - size * 0.1, 0, px, drawY, size * 1.2);
+        bodyGrad.addColorStop(0, this._lightenColor(bodyColor, 20));
+        bodyGrad.addColorStop(0.7, bodyColor);
+        bodyGrad.addColorStop(1, this._darkenColor(bodyColor, 30));
+        
+        ctx.beginPath();
+        ctx.ellipse(px, drawY + size * 0.2, size * 0.7 * squash, size * 0.85 * stretch, 0, 0, Math.PI * 2);
+        ctx.fillStyle = bodyGrad;
+        ctx.fill();
+        
+        // Белая грудка (с мягким градиентом)
+        const bellyGrad = ctx.createRadialGradient(px, drawY + size * 0.3, 0, px, drawY + size * 0.3, size * 0.5);
+        bellyGrad.addColorStop(0, bellyColor);
+        bellyGrad.addColorStop(1, 'rgba(255, 224, 178, 0)');
+        ctx.beginPath();
+        ctx.ellipse(px, drawY + size * 0.35, size * 0.4 * squash, size * 0.55 * stretch, 0, 0, Math.PI * 2);
+        ctx.fillStyle = bellyGrad;
+        ctx.fill();
+        
+        // === ПЕРЕДНИЕ ЛАПКИ ===
+        const armBounce = player.isMoving ? Math.sin(time * 0.015 + 1) * 2 : 0;
+        
+        // Левая передняя лапка
+        ctx.fillStyle = bodyColor;
+        ctx.beginPath();
+        ctx.ellipse(px - size * 0.45, drawY + size * 0.6 + armBounce, size * 0.14 * squash, size * 0.2 * stretch, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = bellyColor;
+        for (let i = 0; i < 2; i++) {
+            ctx.beginPath();
+            ctx.arc(px - size * 0.5 + i * size * 0.06, drawY + size * 0.78 + armBounce, size * 0.035, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Правая передняя лапка
+        ctx.fillStyle = bodyColor;
+        ctx.beginPath();
+        ctx.ellipse(px + size * 0.45, drawY + size * 0.6 - armBounce, size * 0.14 * squash, size * 0.2 * stretch, -0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = bellyColor;
+        for (let i = 0; i < 2; i++) {
+            ctx.beginPath();
+            ctx.arc(px + size * 0.4 + i * size * 0.06, drawY + size * 0.78 - armBounce, size * 0.035, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // === ГОЛОВА (овальная с пушистыми щёчками) ===
+        const headY = drawY - size * 0.35;
+        
+        // Основной овал головы
+        const headGrad = ctx.createRadialGradient(px, headY - size * 0.1, 0, px, headY, size * 0.7);
+        headGrad.addColorStop(0, this._lightenColor(bodyColor, 15));
+        headGrad.addColorStop(1, bodyColor);
+        ctx.beginPath();
+        ctx.ellipse(px, headY, size * 0.55 * squash, size * 0.5 * stretch, 0, 0, Math.PI * 2);
+        ctx.fillStyle = headGrad;
+        ctx.fill();
+        
+        // Пушистые щёчки (белые, чуть выпирают)
+        ctx.fillStyle = bellyColor;
+        ctx.globalAlpha = 0.6;
+        ctx.beginPath();
+        ctx.ellipse(px - size * 0.3, headY + size * 0.15, size * 0.2, size * 0.15, -0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(px + size * 0.3, headY + size * 0.15, size * 0.2, size * 0.15, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        
+        // === УШКИ (треугольные с розовой внутренней частью) ===
+        // Левое ушко
+        ctx.save();
+        ctx.translate(px - size * 0.35, headY - size * 0.35);
+        ctx.rotate(-0.25 + earAngle);
+        // Внешняя часть
+        ctx.beginPath();
+        ctx.moveTo(-size * 0.12, size * 0.1);
+        ctx.lineTo(0, -size * 0.35);
+        ctx.lineTo(size * 0.12, size * 0.1);
+        ctx.closePath();
+        ctx.fillStyle = earsColor;
+        ctx.fill();
+        // Внутренняя розовая часть
+        ctx.beginPath();
+        ctx.moveTo(-size * 0.06, size * 0.05);
+        ctx.lineTo(0, -size * 0.22);
+        ctx.lineTo(size * 0.06, size * 0.05);
+        ctx.closePath();
+        ctx.fillStyle = '#ffb3c1';
+        ctx.fill();
+        ctx.restore();
+        
+        // Правое ушко
+        ctx.save();
+        ctx.translate(px + size * 0.35, headY - size * 0.35);
+        ctx.rotate(0.25 - earAngle);
+        ctx.beginPath();
+        ctx.moveTo(-size * 0.12, size * 0.1);
+        ctx.lineTo(0, -size * 0.35);
+        ctx.lineTo(size * 0.12, size * 0.1);
+        ctx.closePath();
+        ctx.fillStyle = earsColor;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(-size * 0.06, size * 0.05);
+        ctx.lineTo(0, -size * 0.22);
+        ctx.lineTo(size * 0.06, size * 0.05);
+        ctx.closePath();
+        ctx.fillStyle = '#ffb3c1';
+        ctx.fill();
+        ctx.restore();
+        
+        // === ГЛАЗА (большие, выразительные) ===
+        const eyeScale = player.emotionEyeScale || 1;
+        const eyeSpacing = size * 0.22;
+        const eyeY = headY - size * 0.02;
+        const eyeR = size * 0.14 * eyeScale;
+        
+        if (player.emotionState === 'happy' || player.emotionState === 'celebrating') {
+            // Глаза-звёздочки (радость)
+            ctx.fillStyle = '#2c2c2c';
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing, eyeY, eyeR, 0, Math.PI * 2);
+            ctx.arc(px + eyeSpacing, eyeY, eyeR, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#ffd700';
+            this._drawStar(px - eyeSpacing, eyeY, eyeR * 0.5, 4);
+            this._drawStar(px + eyeSpacing, eyeY, eyeR * 0.5, 4);
+        } else if (player.emotionState === 'scared') {
+            // Большие испуганные глаза
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing, eyeY, eyeR * 1.3, 0, Math.PI * 2);
+            ctx.arc(px + eyeSpacing, eyeY, eyeR * 1.3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#1a1a1a';
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing, eyeY + 1, eyeR * 0.7, 0, Math.PI * 2);
+            ctx.arc(px + eyeSpacing, eyeY + 1, eyeR * 0.7, 0, Math.PI * 2);
+            ctx.fill();
+            // Маленькие белые блики
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing + 2, eyeY - 2, eyeR * 0.2, 0, Math.PI * 2);
+            ctx.arc(px + eyeSpacing + 2, eyeY - 2, eyeR * 0.2, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (player.emotionState === 'sad') {
+            ctx.strokeStyle = '#2c2c2c';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing, eyeY, eyeR * 0.7, 0, Math.PI);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(px + eyeSpacing, eyeY, eyeR * 0.7, 0, Math.PI);
+            ctx.stroke();
+        } else if (player.emotionState === 'idle') {
+            ctx.strokeStyle = '#2c2c2c';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(px - eyeSpacing - eyeR * 0.5, eyeY);
+            ctx.lineTo(px - eyeSpacing + eyeR * 0.5, eyeY);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(px + eyeSpacing - eyeR * 0.5, eyeY);
+            ctx.lineTo(px + eyeSpacing + eyeR * 0.5, eyeY);
+            ctx.stroke();
+        } else {
+            // Обычные глаза: белая основа + большой чёрный зрачок + два белых блика
+            // Белая основа
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing, eyeY, eyeR, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(px + eyeSpacing, eyeY, eyeR, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Большой чёрный зрачок
+            ctx.fillStyle = '#1a1a1a';
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing, eyeY, eyeR * 0.7, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(px + eyeSpacing, eyeY, eyeR * 0.7, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Большой блик (сверху)
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing + eyeR * 0.2, eyeY - eyeR * 0.25, eyeR * 0.3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(px + eyeSpacing + eyeR * 0.2, eyeY - eyeR * 0.25, eyeR * 0.3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Маленький блик (сбоку)
+            ctx.beginPath();
+            ctx.arc(px - eyeSpacing - eyeR * 0.15, eyeY + eyeR * 0.15, eyeR * 0.15, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(px + eyeSpacing - eyeR * 0.15, eyeY + eyeR * 0.15, eyeR * 0.15, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // === НОСИК (маленький чёрный треугольник) ===
+        const noseY = headY + size * 0.15;
+        ctx.fillStyle = '#1a1a1a';
+        ctx.beginPath();
+        ctx.moveTo(px, noseY - size * 0.04);
+        ctx.lineTo(px - size * 0.06, noseY + size * 0.04);
+        ctx.lineTo(px + size * 0.06, noseY + size * 0.04);
+        ctx.closePath();
+        ctx.fill();
+        
+        // === РОТИК (лёгкая улыбка-дуга) ===
+        const mouthY = noseY + size * 0.08;
+        const mouthState = player.emotionMouthState || 'normal';
+        
+        if (mouthState === 'smile') {
+            ctx.strokeStyle = '#2c2c2c';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.arc(px, mouthY, size * 0.1, 0.1 * Math.PI, 0.9 * Math.PI);
+            ctx.stroke();
+        } else if (mouthState === 'ooo') {
+            ctx.fillStyle = '#2c2c2c';
+            ctx.beginPath();
+            ctx.ellipse(px, mouthY + size * 0.02, size * 0.06, size * 0.08, 0, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (mouthState === 'sad') {
+            ctx.strokeStyle = '#2c2c2c';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.arc(px, mouthY + size * 0.08, size * 0.08, 1.2 * Math.PI, 1.8 * Math.PI);
+            ctx.stroke();
+        } else if (mouthState === 'yawn') {
+            ctx.fillStyle = '#2c2c2c';
+            ctx.beginPath();
+            ctx.ellipse(px, mouthY + size * 0.02, size * 0.08, size * 0.12, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#ff8a80';
+            ctx.beginPath();
+            ctx.ellipse(px, mouthY + size * 0.08, size * 0.04, size * 0.05, 0, 0, Math.PI);
+            ctx.fill();
+        } else {
+            // Нормальный — лёгкая улыбка
+            ctx.strokeStyle = '#2c2c2c';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(px, mouthY - size * 0.02, size * 0.06, 0.2 * Math.PI, 0.8 * Math.PI);
+            ctx.stroke();
+        }
+    }
+    
+    // Вспомогательная функция: осветлить цвет
+    _lightenColor(color, amount) {
+        if (color.startsWith('rgba')) return color;
+        try {
+            const hex = color.replace('#', '');
+            const r = Math.min(255, parseInt(hex.substr(0, 2), 16) + amount);
+            const g = Math.min(255, parseInt(hex.substr(2, 2), 16) + amount);
+            const b = Math.min(255, parseInt(hex.substr(4, 2), 16) + amount);
+            return `rgb(${r}, ${g}, ${b})`;
+        } catch(e) { return color; }
+    }
+    
+    // Вспомогательная функция: затемнить цвет
+    _darkenColor(color, amount) {
+        if (color.startsWith('rgba')) return color;
+        try {
+            const hex = color.replace('#', '');
+            const r = Math.max(0, parseInt(hex.substr(0, 2), 16) - amount);
+            const g = Math.max(0, parseInt(hex.substr(2, 2), 16) - amount);
+            const b = Math.max(0, parseInt(hex.substr(4, 2), 16) - amount);
+            return `rgb(${r}, ${g}, ${b})`;
+        } catch(e) { return color; }
+    }
 
     // === ОТРИСОВКА ВРАГОВ ===
     drawEnemies(enemies) {
