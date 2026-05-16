@@ -87,4 +87,28 @@ class GameStorage {
         const save = this.load();
         return save ? save.level : 1;
     }
+
+    // ======================================================================
+    // УЛУЧШЕНИЕ 1: Совместимость с системой кристаллов (баланс скинов)
+    // Кристаллы хранятся в отдельном ключе (magic_maze_crystals),
+    // чтобы не ломать совместимость с существующими сохранениями.
+    // ======================================================================
+
+    // Получить общий баланс кристаллов
+    getTotalCrystals() {
+        try {
+            const data = localStorage.getItem('magic_maze_crystals');
+            return data ? parseInt(data) : 0;
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    // Добавить кристаллы к общему балансу
+    addCrystals(amount) {
+        try {
+            const current = this.getTotalCrystals();
+            localStorage.setItem('magic_maze_crystals', (current + amount).toString());
+        } catch (e) {}
+    }
 }

@@ -258,38 +258,63 @@ class MazePopulator {
             this.matrix[c.y][c.x] = GAME_CONSTANTS.CELL_TYPES.CRYSTAL;
         }
 
-        // 3. Враги — далеко от старта
+        // 3. Враги — далеко от старта, БЕЗОПАСНОЕ размещение (Улучшение 2)
+        // Алгоритм: для каждого врага находим маршрут (цикл или тупик),
+        // проверяем BFS что путь от старта к финишу не разрывается
         const enemyCount = getEnemyCountForLevel(this.level);
         const enemyCandidates = availableCells.filter(c =>
             distances[c.y][c.x] >= GAME_CONSTANTS.ENEMIES.MIN_DISTANCE_FROM_START * 2 &&
             this.matrix[c.y][c.x] === GAME_CONSTANTS.CELL_TYPES.PATH
         );
-        const enemyPositions = this._shuffle(enemyCandidates).slice(0, enemyCount);
+        const shuffledEnemyCandidates = this._shuffle(enemyCandidates);
+        let placedEnemies = 0;
         
-        for (const pos of enemyPositions) {
-            // Определяем патрульный маршрут
-            const patrol = this._findPatrolRoute(pos);
-            this.enemies.push({
-                startPos: pos,
-                patrolRoute: patrol,
-                isGuardian: false
-            });
+        for (const pos of shuffledEnemyCandidates) {
+            if (placedEnemies >= enemyCount) break;
+            
+            // Находим безопасный патрульный маршрут
+            const patrol = this._findSafePatrolRoute(pos);
+            
+            // Проверяем, что маршрут не состоит из одной клетки
+            // (одна клетка = враг стоит на месте, не интересно, но допустимо)
+            if (patrol && patrol.length >= 2) {
+                this.enemies.push({
+                    startPos: pos,
+                    patrolRoute: patrol,
+                    isGuardian: false
+                });
+                placedEnemies++;
+            } else if (patrol && patrol.length === 1) {
+                // Враг на одной клетке — допускаем только если эта клетка не мост
+                if (this._isRouteSafe(patrol)) {
+                    this.enemies.push({
+                        startPos: pos,
+                        patrolRoute: patrol,
+                        isGuardian: false
+                    });
+                    placedEnemies++;
+                }
+            }
         }
 
-        // Хранитель (каждые 10 уровней)
+        // Хранитель (каждые 10 уровней) — тоже безопасное размещение
         if (this.level > 0 && this.level % GAME_CONSTANTS.OBSTACLES.GUARDIAN_EVERY === 0) {
             const guardianCandidates = availableCells.filter(c =>
                 distances[c.y][c.x] >= 5 &&
                 this.matrix[c.y][c.x] === GAME_CONSTANTS.CELL_TYPES.PATH
             );
-            if (guardianCandidates.length > 0) {
-                const gPos = guardianCandidates[Math.floor(Math.random() * guardianCandidates.length)];
-                const patrol = this._findPatrolRoute(gPos);
-                this.enemies.push({
-                    startPos: gPos,
-                    patrolRoute: patrol,
-                    isGuardian: true
-                });
+            const shuffledGuardianCandidates = this._shuffle(guardianCandidates);
+            
+            for (const gPos of shuffledGuardianCandidates) {
+                const patrol = this._findSafePatrolRoute(gPos);
+                if (patrol && patrol.length >= 2 && this._isRouteSafe(patrol)) {
+                    this.enemies.push({
+                        startPos: gPos,
+                        patrolRoute: patrol,
+                        isGuardian: true
+                    });
+                    break;
+                }
             }
         }
 
@@ -354,19 +379,218 @@ class MazePopulator {
         };
     }
 
-    // Найти патрульный маршрут (линейный участок прохода)
-    _findPatrolRoute(startPos) {
-        const route = [startPos];
+    // ======================================================================
+    // УЛУЧШЕНИЕ 2: Безопасное размещение врагов
+    // Враги размещаются так, чтобы ВСЕГДА существовал путь от старта к финишу,
+    // даже когда враги блокируют свои клетки. Используются циклы в графе лабиринта
+    // или тупиковые маршруты со свободным обходом.
+    // ======================================================================
+
+    // Найти безопасный патрульный маршрут для врага
+    // Приоритет: 1) цикл в графе, 2) тупиковый маршрут с обходом
+    _findSafePatrolRoute(startPos) {
+        // Пытаемся найти цикл (замкнутый путь) длиной 4+ клеток
+        const cycleRoute = this._findCycleRoute(startPos);
+        if (cycleRoute && this._isRouteSafe(cycleRoute)) {
+            return cycleRoute;
+        }
+
+        // Пытаемся найти цикл из ближайших клеток
+        const nearbyCycle = this._findNearbyCycle(startPos);
+        if (nearbyCycle && this._isRouteSafe(nearbyCycle)) {
+            return nearbyCycle;
+        }
+
+        // Фоллбэк: тупиковый маршрут, смещённый к концу тупика
+        const deadEndRoute = this._findDeadEndRoute(startPos);
+        if (deadEndRoute && this._isRouteSafe(deadEndRoute)) {
+            return deadEndRoute;
+        }
+
+        // Последний фоллбэк: одна клетка (враг стоит на месте, не блокируя)
+        return [startPos];
+    }
+
+    // Поиск цикла (замкнутого пути) из данной позиции методом BFS
+    // Ищем путь длиной 4+, который возвращается к началу
+    _findCycleRoute(startPos) {
         const dirs = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
         
-        // Выбираем случайное направление
-        const shuffledDirs = this._shuffle([...dirs]);
+        // Получаем соседей стартовой позиции
+        const neighbors = [];
+        for (const dir of dirs) {
+            const nx = startPos.x + dir.dx;
+            const ny = startPos.y + dir.dy;
+            if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height &&
+                this.matrix[ny][nx] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
+                neighbors.push({ x: nx, y: ny });
+            }
+        }
+
+        // Если менее 2 соседей — цикл невозможен
+        if (neighbors.length < 2) return null;
+
+        // Для каждой пары соседей ищем путь между ними, не проходящий через startPos
+        for (let i = 0; i < neighbors.length; i++) {
+            for (let j = i + 1; j < neighbors.length; j++) {
+                const pathBetween = this._bfsPath(neighbors[i], neighbors[j], startPos);
+                if (pathBetween && pathBetween.length >= 2 && pathBetween.length <= 8) {
+                    // Формируем цикл: startPos -> neighbors[i] -> ... -> neighbors[j] -> startPos
+                    const cycle = [startPos, neighbors[i], ...pathBetween.slice(1, -1), neighbors[j]];
+                    if (cycle.length >= 4) {
+                        return cycle;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // BFS поиск пути между двумя точками, исключая заблокированную клетку
+    _bfsPath(from, to, excluded) {
+        const queue = [{ pos: from, path: [from] }];
+        const visited = new Set();
+        visited.add(`${from.x},${from.y}`);
+        if (excluded) visited.add(`${excluded.x},${excluded.y}`);
+
+        const dirs = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
+
+        while (queue.length > 0) {
+            const { pos, path } = queue.shift();
+
+            if (pos.x === to.x && pos.y === to.y) {
+                return path;
+            }
+
+            // Ограничиваем длину пути для производительности
+            if (path.length > 10) continue;
+
+            for (const dir of dirs) {
+                const nx = pos.x + dir.dx;
+                const ny = pos.y + dir.dy;
+                const key = `${nx},${ny}`;
+
+                if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height &&
+                    !visited.has(key) &&
+                    this.matrix[ny][nx] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
+                    visited.add(key);
+                    queue.push({ pos: { x: nx, y: ny }, path: [...path, { x: nx, y: ny }] });
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // Поиск ближайшего цикла: ищем клетки с 3+ соседями (перекрёстки)
+    // и строим маршрут через них
+    _findNearbyCycle(startPos) {
+        const dirs = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
         
-        for (const dir of shuffledDirs) {
+        // BFS от startPos для нахождения ближайших перекрёстков
+        const queue = [{ pos: startPos, dist: 0 }];
+        const visited = new Set();
+        visited.add(`${startPos.x},${startPos.y}`);
+        const crossroads = [];
+
+        while (queue.length > 0 && crossroads.length < 5) {
+            const { pos, dist } = queue.shift();
+            if (dist > 6) break;
+
+            // Считаем соседей
+            let neighborCount = 0;
+            for (const dir of dirs) {
+                const nx = pos.x + dir.dx;
+                const ny = pos.y + dir.dy;
+                if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height &&
+                    this.matrix[ny][nx] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
+                    neighborCount++;
+                }
+            }
+
+            if (neighborCount >= 3 && dist > 0) {
+                crossroads.push(pos);
+            }
+
+            for (const dir of dirs) {
+                const nx = pos.x + dir.dx;
+                const ny = pos.y + dir.dy;
+                const key = `${nx},${ny}`;
+                if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height &&
+                    !visited.has(key) &&
+                    this.matrix[ny][nx] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
+                    visited.add(key);
+                    queue.push({ pos: { x: nx, y: ny }, dist: dist + 1 });
+                }
+            }
+        }
+
+        // Пробуем построить цикл через найденные перекрёстки
+        for (const cross of crossroads) {
+            const pathTo = this._bfsPath(startPos, cross, null);
+            if (pathTo && pathTo.length >= 2) {
+                // Ищем альтернативный путь обратно
+                const excludeSet = new Set(pathTo.slice(1, -1).map(p => `${p.x},${p.y}`));
+                const pathBack = this._bfsPathExcluding(cross, startPos, excludeSet);
+                if (pathBack && pathBack.length >= 2) {
+                    const cycle = [...pathTo.slice(0, -1), ...pathBack];
+                    if (cycle.length >= 4 && cycle.length <= 10) {
+                        return cycle;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // BFS с исключением набора клеток (для поиска альтернативного пути)
+    _bfsPathExcluding(from, to, excludedSet) {
+        const queue = [{ pos: from, path: [from] }];
+        const visited = new Set();
+        visited.add(`${from.x},${from.y}`);
+        for (const key of excludedSet) visited.add(key);
+
+        const dirs = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
+
+        while (queue.length > 0) {
+            const { pos, path } = queue.shift();
+
+            if (pos.x === to.x && pos.y === to.y) {
+                return path;
+            }
+
+            if (path.length > 12) continue;
+
+            for (const dir of dirs) {
+                const nx = pos.x + dir.dx;
+                const ny = pos.y + dir.dy;
+                const key = `${nx},${ny}`;
+
+                if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height &&
+                    !visited.has(key) &&
+                    this.matrix[ny][nx] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
+                    visited.add(key);
+                    queue.push({ pos: { x: nx, y: ny }, path: [...path, { x: nx, y: ny }] });
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // Тупиковый маршрут: враг ходит в тупик и обратно,
+    // но его маршрут смещён к концу тупика, оставляя развилку свободной
+    _findDeadEndRoute(startPos) {
+        const dirs = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
+        
+        // Ищем линейный участок (коридор) от startPos
+        for (const dir of this._shuffle([...dirs])) {
+            const route = [];
             let current = { ...startPos };
-            let steps = 0;
             
-            while (steps < GAME_CONSTANTS.ENEMIES.PATROL_RANGE) {
+            for (let step = 0; step < GAME_CONSTANTS.ENEMIES.PATROL_RANGE + 1; step++) {
                 const nx = current.x + dir.dx;
                 const ny = current.y + dir.dy;
                 
@@ -374,52 +598,124 @@ class MazePopulator {
                     this.matrix[ny][nx] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
                     current = { x: nx, y: ny };
                     route.push({ ...current });
-                    steps++;
                 } else {
                     break;
                 }
             }
-            
-            if (route.length > 1) break;
+
+            // Смещаем маршрут к концу, оставляя стартовую развилку свободной
+            if (route.length >= 2) {
+                // Берём только дальнюю часть маршрута (пропускаем первую клетку у развилки)
+                return route.slice(0); // Враг патрулирует без startPos
+            }
         }
 
-        return route;
+        return null;
     }
 
-    // Размещение движущихся стен
+    // Проверка безопасности маршрута:
+    // Временно помечаем все клетки маршрута как стены
+    // и проверяем, что путь от старта к финишу всё ещё существует (BFS)
+    _isRouteSafe(route) {
+        if (!route || route.length === 0) return false;
+
+        // Временно блокируем клетки маршрута
+        const originalValues = [];
+        for (const cell of route) {
+            originalValues.push(this.matrix[cell.y][cell.x]);
+            this.matrix[cell.y][cell.x] = GAME_CONSTANTS.CELL_TYPES.WALL;
+        }
+
+        // BFS от старта к финишу
+        const pathExists = this._bfsCheck(this.startPos, this.finishPos);
+
+        // Восстанавливаем исходные значения
+        for (let i = 0; i < route.length; i++) {
+            this.matrix[route[i].y][route[i].x] = originalValues[i];
+        }
+
+        return pathExists;
+    }
+
+    // Быстрая проверка существования пути BFS (без построения полного пути)
+    _bfsCheck(from, to) {
+        if (!from || !to) return false;
+        if (from.x === to.x && from.y === to.y) return true;
+
+        const queue = [from];
+        const visited = new Set();
+        visited.add(`${from.x},${from.y}`);
+        const dirs = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
+
+        while (queue.length > 0) {
+            const curr = queue.shift();
+
+            for (const dir of dirs) {
+                const nx = curr.x + dir.dx;
+                const ny = curr.y + dir.dy;
+                const key = `${nx},${ny}`;
+
+                if (nx === to.x && ny === to.y) return true;
+
+                if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height &&
+                    !visited.has(key) &&
+                    this.matrix[ny][nx] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
+                    visited.add(key);
+                    queue.push({ x: nx, y: ny });
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // Старый метод оставлен для совместимости, но теперь вызывает безопасную версию
+    _findPatrolRoute(startPos) {
+        return this._findSafePatrolRoute(startPos);
+    }
+
+    // Размещение движущихся стен (Улучшение 2: проверка BFS безопасности)
+    // Движущиеся стены не должны перекрывать единственный проход к финишу
     _placeMovingWalls(count) {
         // Ищем проходы шириной 1, рядом со стеной, которые можно временно блокировать
-        for (let i = 0; i < count; i++) {
-            // Ищем горизонтальный или вертикальный проход
-            const candidates = [];
-            for (let y = 2; y < this.height - 2; y++) {
-                for (let x = 2; x < this.width - 2; x++) {
-                    if (this.matrix[y][x] === GAME_CONSTANTS.CELL_TYPES.PATH) {
-                        // Проверяем, что это проход между двумя стенами (горизонтально или вертикально)
-                        if (this.matrix[y - 1][x] === GAME_CONSTANTS.CELL_TYPES.WALL &&
-                            this.matrix[y + 1][x] === GAME_CONSTANTS.CELL_TYPES.WALL &&
-                            this.matrix[y][x - 1] !== GAME_CONSTANTS.CELL_TYPES.WALL &&
-                            this.matrix[y][x + 1] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
-                            candidates.push({ x, y, direction: 'horizontal' });
-                        }
-                        if (this.matrix[y][x - 1] === GAME_CONSTANTS.CELL_TYPES.WALL &&
-                            this.matrix[y][x + 1] === GAME_CONSTANTS.CELL_TYPES.WALL &&
-                            this.matrix[y - 1][x] !== GAME_CONSTANTS.CELL_TYPES.WALL &&
-                            this.matrix[y + 1][x] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
-                            candidates.push({ x, y, direction: 'vertical' });
-                        }
+        const candidates = [];
+        for (let y = 2; y < this.height - 2; y++) {
+            for (let x = 2; x < this.width - 2; x++) {
+                if (this.matrix[y][x] === GAME_CONSTANTS.CELL_TYPES.PATH) {
+                    // Проверяем, что это проход между двумя стенами (горизонтально или вертикально)
+                    if (this.matrix[y - 1][x] === GAME_CONSTANTS.CELL_TYPES.WALL &&
+                        this.matrix[y + 1][x] === GAME_CONSTANTS.CELL_TYPES.WALL &&
+                        this.matrix[y][x - 1] !== GAME_CONSTANTS.CELL_TYPES.WALL &&
+                        this.matrix[y][x + 1] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
+                        candidates.push({ x, y, direction: 'horizontal' });
+                    }
+                    if (this.matrix[y][x - 1] === GAME_CONSTANTS.CELL_TYPES.WALL &&
+                        this.matrix[y][x + 1] === GAME_CONSTANTS.CELL_TYPES.WALL &&
+                        this.matrix[y - 1][x] !== GAME_CONSTANTS.CELL_TYPES.WALL &&
+                        this.matrix[y + 1][x] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
+                        candidates.push({ x, y, direction: 'vertical' });
                     }
                 }
             }
+        }
 
-            if (candidates.length > 0) {
-                const wall = candidates[Math.floor(Math.random() * candidates.length)];
+        // Перемешиваем кандидатов и выбираем только безопасные
+        const shuffled = this._shuffle(candidates);
+        let placed = 0;
+
+        for (const wall of shuffled) {
+            if (placed >= count) break;
+
+            // Проверяем: если стена заблокирует эту клетку, есть ли альтернативный путь?
+            const route = [{ x: wall.x, y: wall.y }];
+            if (this._isRouteSafe(route)) {
                 this.movingWalls.push({
                     pos: { x: wall.x, y: wall.y },
                     direction: wall.direction,
                     isBlocking: false,
                     timer: 0
                 });
+                placed++;
             }
         }
     }

@@ -15,6 +15,7 @@ class Game {
         this.storage = new GameStorage();
         this.enemyManager = new EnemyManager();
         this.powerUpManager = new PowerUpManager();
+        this.skinShop = new SkinShop(); // Улучшение 1: Волшебный гардероб
 
         // Состояние
         this.state = GAME_CONSTANTS.STATES.MENU;
@@ -146,6 +147,13 @@ class Game {
         const y = clientY - rect.top;
 
         if (this.state === GAME_CONSTANTS.STATES.PAUSED) {
+            // Улучшение 1: иконка гардероба в паузе (левый верхний угол)
+            if (x < 50 && y < 55) {
+                this._shopReturnState = GAME_CONSTANTS.STATES.PAUSED;
+                this.state = GAME_CONSTANTS.STATES.SHOP;
+                this.skinShop.open();
+                return;
+            }
             this.state = GAME_CONSTANTS.STATES.PLAYING;
             return;
         }
@@ -159,12 +167,29 @@ class Game {
             if (this.storage.hasSave() && this._isButtonPressed(x, y, this.canvas.width / 2, 500, 160, 50)) {
                 this._continueGame();
             }
+            // Улучшение 1: Кнопка "Гардероб"
+            if (this._isButtonPressed(x, y, this.canvas.width / 2, 570, 160, 50)) {
+                this._shopReturnState = GAME_CONSTANTS.STATES.MENU;
+                this.state = GAME_CONSTANTS.STATES.SHOP;
+                this.skinShop.open();
+            }
             return;
         }
 
         if (this.state === GAME_CONSTANTS.STATES.GAME_OVER) {
             if (this._isButtonPressed(x, y, this.canvas.width / 2, 510, 160, 50)) {
                 this._startNewGame();
+            }
+            return;
+        }
+
+        // Улучшение 1: обработка кликов в магазине
+        if (this.state === GAME_CONSTANTS.STATES.SHOP) {
+            const result = this.skinShop.handleClick(x, y, this.canvas.width, this.canvas.height);
+            if (result === 'close') {
+                this.skinShop.close();
+                // Возвращаемся в предыдущее состояние
+                this.state = this._shopReturnState || GAME_CONSTANTS.STATES.MENU;
             }
             return;
         }
@@ -303,6 +328,11 @@ class Game {
                 this._updatePortalTransition(deltaTime);
                 this._renderPlaying();
                 break;
+            // Улучшение 1: экран Волшебного Гардероба
+            case GAME_CONSTANTS.STATES.SHOP:
+                this._updateShop(deltaTime);
+                this._renderShop();
+                break;
         }
 
         requestAnimationFrame((t) => this.gameLoop(t));
@@ -314,7 +344,7 @@ class Game {
     }
 
     _renderMenu() {
-        this.renderer.drawMenuScreen(this.storage.hasSave(), performance.now());
+        this.renderer.drawMenuScreen(this.storage.hasSave(), performance.now(), this.skinShop.getCrystals());
         this.renderer.drawParticles(this.particles);
     }
 
@@ -374,6 +404,11 @@ class Game {
         // Обновление дыхания стен
         this.renderer.updateWallBreath(deltaTime);
 
+        // Улучшение 3: звук зевоты при бездействии
+        if (this.player.emotionState === 'idle' && this.player.emotionTimer > 1900) {
+            this.audio.playEmotionIdle();
+        }
+
         // Проверка столкновений (только когда не двигается)
         if (!this.player.isMoving) {
             this._checkCollisions();
@@ -390,6 +425,8 @@ class Game {
         if (this.player.isMoving || this.inputQueue.length === 0) return;
 
         const direction = this.inputQueue.shift();
+        // Улучшение 3: сброс таймера бездействия при вводе
+        this.player.resetIdleTimer();
         let dx = 0, dy = 0;
 
         switch (direction) {
@@ -432,7 +469,12 @@ class Game {
             if (!crystal.collected && crystal.x === px && crystal.y === py) {
                 crystal.collected = true;
                 this.player.addScore(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
+                // Улучшение 1: добавляем кристаллы в баланс магазина
+                this.skinShop.addCrystals(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
                 this.audio.playCrystalCollect();
+                // Улучшение 3: эмоция радости
+                this.player.triggerEmotion('happy', 1000);
+                this.audio.playEmotionHappy();
                 this.particles.emitCrystalCollect(
                     this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
                     this.renderer.offsetY + py * this.cellSize + this.cellSize / 2
@@ -451,6 +493,9 @@ class Game {
         if (collectedPower) {
             this.player.activatePower(collectedPower.type);
             this.audio.playPowerUp();
+            // Улучшение 3: эмоция удивления
+            this.player.triggerEmotion('surprised', 800);
+            this.audio.playEmotionSurprised();
             this.particles.emitPowerCollect(
                 this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
                 this.renderer.offsetY + py * this.cellSize + this.cellSize / 2,
@@ -506,12 +551,18 @@ class Game {
             const damaged = this.player.takeDamage(hitEnemy.damage);
             if (damaged) {
                 this.audio.playDamage();
+                // Улучшение 3: эмоция испуга
+                this.player.triggerEmotion('scared', 1200);
+                this.audio.playEmotionScared();
                 this.particles.emitDamage(
                     this.renderer.offsetX + this.player.pixelX + this.cellSize / 2,
                     this.renderer.offsetY + this.player.pixelY + this.cellSize / 2
                 );
 
                 if (this.player.lives <= 0) {
+                    // Улучшение 3: эмоция грусти при проигрыше
+                    this.player.triggerEmotion('sad', 2000);
+                    this.audio.playEmotionSad();
                     this._gameOver();
                 }
             }
@@ -563,6 +614,9 @@ class Game {
         this.player.startVictory();
         this.player.addScore(GAME_CONSTANTS.SCORING.LEVEL_BONUS * this.level);
         this.audio.playLevelComplete();
+        // Улучшение 3: эмоция бурной радости
+        this.player.triggerEmotion('celebrating', 2500);
+        this.audio.playEmotionCelebrating();
         this.particles.emitLevelComplete(this.canvas.width, this.canvas.height);
         this.state = GAME_CONSTANTS.STATES.LEVEL_COMPLETE;
         this.levelCompleteTimer = 2500;
@@ -629,6 +683,8 @@ class Game {
             // Сбор кристаллов
             if (this.bonusRoom.collectCrystal(px, py)) {
                 this.player.addScore(GAME_CONSTANTS.SCORING.BONUS_ROOM_CRYSTAL);
+                // Улучшение 1: добавляем кристаллы в баланс магазина
+                this.skinShop.addCrystals(GAME_CONSTANTS.SCORING.BONUS_ROOM_CRYSTAL);
                 this.audio.playCrystalCollect();
                 this.particles.emitCrystalCollect(
                     this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
@@ -740,7 +796,13 @@ class Game {
         }
 
         // Игрок
-        this.renderer.drawPlayer(this.player);
+        const activeSkin = this.skinShop.getActiveSkin();
+        this.renderer.drawPlayer(this.player, activeSkin);
+
+        // Улучшение 1: эффекты активного скина
+        if (activeSkin) {
+            this.renderer.drawSkinEffects(this.player, activeSkin, time);
+        }
 
         // Частицы (поверх всего)
         this.renderer.drawParticles(this.particles);
@@ -758,6 +820,24 @@ class Game {
 
         // Кнопка паузы
         this.renderer.drawPauseButton(this.canvas.width - 22, 27, 14);
+    }
+
+    // === Улучшение 1: ОБНОВЛЕНИЕ И РЕНДЕР МАГАЗИНА ===
+    _updateShop(deltaTime) {
+        // Обновление анимации покупки
+        if (this.skinShop.purchaseAnimation) {
+            this.skinShop.updatePurchaseAnimation(deltaTime);
+        }
+    }
+
+    _renderShop() {
+        const time = performance.now();
+        this.renderer.drawShopScreen(this.skinShop, time);
+        
+        // Анимация покупки (поверх всего)
+        if (this.skinShop.purchaseAnimation) {
+            this.renderer.drawPurchaseAnimation(this.skinShop, time);
+        }
     }
 
     _getMaxPowerDuration(type) {

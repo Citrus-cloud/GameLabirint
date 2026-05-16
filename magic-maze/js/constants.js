@@ -170,7 +170,8 @@ const GAME_CONSTANTS = {
         BONUS_ROOM: 'bonus_room',
         GAME_OVER: 'game_over',
         LEVEL_COMPLETE: 'level_complete',
-        PORTAL_TRANSITION: 'portal_transition'
+        PORTAL_TRANSITION: 'portal_transition',
+        SHOP: 'shop' // Улучшение 1: Волшебный гардероб
     },
     
     // Типы клеток лабиринта

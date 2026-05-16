@@ -252,4 +252,194 @@ class AudioManager {
         this.enabled = !this.enabled;
         return this.enabled;
     }
+
+    // ======================================================================
+    // УЛУЧШЕНИЕ 3: Звуки эмоций лисёнка
+    // Каждый звук — короткий, приятный для детей, не режет слух
+    // ======================================================================
+
+    // Защита от накладывания звуков (хранит время последнего звука)
+    _lastSoundTime = 0;
+    _minSoundInterval = 100; // мс между звуками
+
+    _canPlaySound() {
+        const now = performance.now();
+        if (now - this._lastSoundTime < this._minSoundInterval) return false;
+        this._lastSoundTime = now;
+        return true;
+    }
+
+    // === ЗВУК РАДОСТИ при сборе кристалла (мелодичный «дзыынь!» с повышением тона) ===
+    playEmotionHappy() {
+        if (!this.enabled || !this._canPlaySound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Основной восходящий тон
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(660, now);
+        osc.frequency.exponentialRampToValueAtTime(1320, now + 0.15);
+        osc.frequency.exponentialRampToValueAtTime(1980, now + 0.25);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+        
+        // Высокий звон (блеск)
+        const osc2 = this.ctx.createOscillator();
+        const gain2 = this.ctx.createGain();
+        osc2.type = 'sine';
+        osc2.frequency.setValueAtTime(2640, now + 0.1);
+        gain2.gain.setValueAtTime(0.08, now + 0.1);
+        gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+        osc2.connect(gain2);
+        gain2.connect(this.ctx.destination);
+        osc2.start(now + 0.1);
+        osc2.stop(now + 0.3);
+    }
+
+    // === ЗВУК УДИВЛЕНИЯ при сборе усиления (три быстрых восходящих ноты) ===
+    playEmotionSurprised() {
+        if (!this.enabled || !this._canPlaySound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        const notes = [523, 784, 1047]; // C5, G5, C6
+        
+        notes.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, now + i * 0.08);
+            gain.gain.setValueAtTime(0.2, now + i * 0.08);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.08 + 0.15);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now + i * 0.08);
+            osc.stop(now + i * 0.08 + 0.18);
+        });
+    }
+
+    // === ЗВУК ИСПУГА при получении урона (низкий глухой «бум» с падением тона) ===
+    playEmotionScared() {
+        if (!this.enabled || !this._canPlaySound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Глухой удар с падением
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(200, now);
+        osc.frequency.exponentialRampToValueAtTime(60, now + 0.3);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.4);
+        
+        // Тревожный обертон
+        const osc2 = this.ctx.createOscillator();
+        const gain2 = this.ctx.createGain();
+        osc2.type = 'square';
+        osc2.frequency.setValueAtTime(120, now);
+        osc2.frequency.exponentialRampToValueAtTime(40, now + 0.25);
+        gain2.gain.setValueAtTime(0.1, now);
+        gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+        osc2.connect(gain2);
+        gain2.connect(this.ctx.destination);
+        osc2.start(now);
+        osc2.stop(now + 0.3);
+    }
+
+    // === ЗВУК ПОБЕДЫ при завершении уровня (триумфальная мелодия) ===
+    playEmotionCelebrating() {
+        if (!this.enabled || !this._canPlaySound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        // Триумфальная фанфара: До-Ми-Соль-До(выше)
+        const notes = [523, 659, 784, 1047, 1319];
+        
+        notes.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + i * 0.1);
+            gain.gain.setValueAtTime(0.25, now + i * 0.1);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.1 + 0.3);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now + i * 0.1);
+            osc.stop(now + i * 0.1 + 0.35);
+        });
+        
+        // Финальный аккорд
+        const chordTime = now + 0.55;
+        [523, 659, 784, 1047].forEach(freq => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, chordTime);
+            gain.gain.setValueAtTime(0.12, chordTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, chordTime + 0.6);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(chordTime);
+            osc.stop(chordTime + 0.7);
+        });
+    }
+
+    // === ЗВУК ГРУСТИ при проигрыше (грустная нисходящая мелодия) ===
+    playEmotionSad() {
+        if (!this.enabled || !this._canPlaySound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        // Нисходящая грустная мелодия: Ми-До-Ля
+        const notes = [659, 523, 440];
+        
+        notes.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + i * 0.25);
+            gain.gain.setValueAtTime(0.2, now + i * 0.25);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.25 + 0.4);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now + i * 0.25);
+            osc.stop(now + i * 0.25 + 0.45);
+        });
+    }
+
+    // === ЗВУК ЗЕВОТЫ при бездействии (тихий, мягкий) ===
+    playEmotionIdle() {
+        if (!this.enabled || !this._canPlaySound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Мягкий нисходящий тон (зевок)
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.6);
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.08, now + 0.1);
+        gain.gain.linearRampToValueAtTime(0.06, now + 0.4);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.7);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.7);
+    }
 }

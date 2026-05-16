@@ -108,12 +108,14 @@ class Renderer {
     }
 
     // === ОТРИСОВКА ЛИСЁНКА ФОКСИ ===
-    drawPlayer(player) {
+    drawPlayer(player, skinOverride) {
         if (!player.isVisible) return;
 
         const cs = this.cellSize;
+        // Улучшение 3: смещения от эмоций
+        const emotionJump = player.emotionJumpOffset || 0;
         const px = this.offsetX + player.pixelX + cs / 2;
-        const py = this.offsetY + player.pixelY + cs / 2 - player.bounceOffset;
+        const py = this.offsetY + player.pixelY + cs / 2 - player.bounceOffset - emotionJump;
         const size = cs * 0.35;
 
         this.ctx.save();
@@ -127,6 +129,23 @@ class Renderer {
 
         const drawY = player.isVictory ? py - player.victoryJump : py;
 
+        // Улучшение 3: squash & stretch от эмоций
+        const squash = player.emotionSquash || 1;
+        const stretch = player.emotionStretch || 1;
+
+        // Улучшение 1: цвета из скина (если есть)
+        const skin = skinOverride || null;
+        const bodyColor = skin ? skin.bodyColor : GAME_CONSTANTS.COLORS.FOXY_BODY;
+        const bellyColor = skin ? skin.bellyColor : GAME_CONSTANTS.COLORS.FOXY_BELLY;
+        const tailColor = skin ? skin.tailColor : GAME_CONSTANTS.COLORS.FOXY_TAIL;
+        const earsColor = skin ? skin.earsColor : GAME_CONSTANTS.COLORS.FOXY_EARS;
+
+        // Свечение скина
+        if (skin && skin.glowIntensity > 3) {
+            this.ctx.shadowColor = skin.glowColor;
+            this.ctx.shadowBlur = skin.glowIntensity * 0.5;
+        }
+
         // Свечение при щите
         if (player.activePower === 'shield') {
             this.ctx.shadowColor = GAME_CONSTANTS.COLORS.POWER_SHIELD;
@@ -136,49 +155,117 @@ class Renderer {
             this.ctx.shadowBlur = 10;
         }
 
-        // Тело (овал)
+        // Прозрачность для призрачных скинов
+        if (skin && skin.transparency) {
+            this.ctx.globalAlpha = skin.transparency;
+        }
+
+        // Тело (овал) с squash/stretch
         this.ctx.beginPath();
-        this.ctx.ellipse(px, drawY, size, size * 1.1, 0, 0, Math.PI * 2);
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.FOXY_BODY;
+        this.ctx.ellipse(px, drawY, size * squash, size * 1.1 * stretch, 0, 0, Math.PI * 2);
+        this.ctx.fillStyle = bodyColor;
         this.ctx.fill();
 
         // Животик
         this.ctx.beginPath();
-        this.ctx.ellipse(px, drawY + size * 0.3, size * 0.5, size * 0.5, 0, 0, Math.PI * 2);
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.FOXY_BELLY;
+        this.ctx.ellipse(px, drawY + size * 0.3, size * 0.5 * squash, size * 0.5 * stretch, 0, 0, Math.PI * 2);
+        this.ctx.fillStyle = bellyColor;
         this.ctx.fill();
 
-        // Ушки
+        // Ушки (с углом от эмоций)
+        const earAngle = player.emotionEarAngle || 0;
         const earSize = size * 0.5;
+        
+        this.ctx.save();
+        this.ctx.translate(px - size * 0.3, drawY - size * 0.7);
+        this.ctx.rotate(earAngle);
         this.ctx.beginPath();
-        this.ctx.moveTo(px - size * 0.6, drawY - size * 0.7);
-        this.ctx.lineTo(px - size * 0.3, drawY - size * 1.3);
-        this.ctx.lineTo(px, drawY - size * 0.7);
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.FOXY_EARS;
+        this.ctx.moveTo(-size * 0.3, 0);
+        this.ctx.lineTo(0, -size * 0.6);
+        this.ctx.lineTo(size * 0.3, 0);
+        this.ctx.fillStyle = earsColor;
         this.ctx.fill();
+        this.ctx.restore();
 
+        this.ctx.save();
+        this.ctx.translate(px + size * 0.3, drawY - size * 0.7);
+        this.ctx.rotate(-earAngle);
         this.ctx.beginPath();
-        this.ctx.moveTo(px, drawY - size * 0.7);
-        this.ctx.lineTo(px + size * 0.3, drawY - size * 1.3);
-        this.ctx.lineTo(px + size * 0.6, drawY - size * 0.7);
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.FOXY_EARS;
+        this.ctx.moveTo(-size * 0.3, 0);
+        this.ctx.lineTo(0, -size * 0.6);
+        this.ctx.lineTo(size * 0.3, 0);
+        this.ctx.fillStyle = earsColor;
         this.ctx.fill();
+        this.ctx.restore();
 
-        // Глаза
+        // Глаза (масштаб от эмоций)
+        const eyeScale = player.emotionEyeScale || 1;
         const eyeOffsetX = size * 0.25;
         const eyeY = drawY - size * 0.2;
-        this.ctx.beginPath();
-        this.ctx.arc(px - eyeOffsetX, eyeY, size * 0.15, 0, Math.PI * 2);
-        this.ctx.arc(px + eyeOffsetX, eyeY, size * 0.15, 0, Math.PI * 2);
-        this.ctx.fillStyle = '#2c2c2c';
-        this.ctx.fill();
+        const eyeRadius = size * 0.15 * eyeScale;
 
-        // Блики в глазах
-        this.ctx.beginPath();
-        this.ctx.arc(px - eyeOffsetX + 2, eyeY - 2, size * 0.06, 0, Math.PI * 2);
-        this.ctx.arc(px + eyeOffsetX + 2, eyeY - 2, size * 0.06, 0, Math.PI * 2);
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fill();
+        // Улучшение 3: звёздочки в глазах при радости
+        if (player.emotionState === 'happy' || player.emotionState === 'celebrating') {
+            // Глаза-звёздочки
+            this.ctx.fillStyle = '#2c2c2c';
+            this.ctx.beginPath();
+            this.ctx.arc(px - eyeOffsetX, eyeY, eyeRadius, 0, Math.PI * 2);
+            this.ctx.arc(px + eyeOffsetX, eyeY, eyeRadius, 0, Math.PI * 2);
+            this.ctx.fill();
+            
+            // Звёздные блики
+            this.ctx.fillStyle = '#ffd700';
+            this._drawStar(px - eyeOffsetX, eyeY, eyeRadius * 0.6, 4);
+            this._drawStar(px + eyeOffsetX, eyeY, eyeRadius * 0.6, 4);
+        } else if (player.emotionState === 'scared') {
+            // Большие испуганные глаза
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.beginPath();
+            this.ctx.arc(px - eyeOffsetX, eyeY, eyeRadius * 1.2, 0, Math.PI * 2);
+            this.ctx.arc(px + eyeOffsetX, eyeY, eyeRadius * 1.2, 0, Math.PI * 2);
+            this.ctx.fill();
+            this.ctx.fillStyle = '#2c2c2c';
+            this.ctx.beginPath();
+            this.ctx.arc(px - eyeOffsetX, eyeY + 1, eyeRadius * 0.7, 0, Math.PI * 2);
+            this.ctx.arc(px + eyeOffsetX, eyeY + 1, eyeRadius * 0.7, 0, Math.PI * 2);
+            this.ctx.fill();
+        } else if (player.emotionState === 'sad') {
+            // Грустные глаза (полукруги)
+            this.ctx.strokeStyle = '#2c2c2c';
+            this.ctx.lineWidth = 2;
+            this.ctx.beginPath();
+            this.ctx.arc(px - eyeOffsetX, eyeY, eyeRadius * 0.8, 0, Math.PI);
+            this.ctx.stroke();
+            this.ctx.beginPath();
+            this.ctx.arc(px + eyeOffsetX, eyeY, eyeRadius * 0.8, 0, Math.PI);
+            this.ctx.stroke();
+        } else if (player.emotionState === 'idle') {
+            // Прищуренные глаза (зевота)
+            this.ctx.strokeStyle = '#2c2c2c';
+            this.ctx.lineWidth = 2.5;
+            this.ctx.beginPath();
+            this.ctx.moveTo(px - eyeOffsetX - eyeRadius * 0.6, eyeY);
+            this.ctx.lineTo(px - eyeOffsetX + eyeRadius * 0.6, eyeY);
+            this.ctx.stroke();
+            this.ctx.beginPath();
+            this.ctx.moveTo(px + eyeOffsetX - eyeRadius * 0.6, eyeY);
+            this.ctx.lineTo(px + eyeOffsetX + eyeRadius * 0.6, eyeY);
+            this.ctx.stroke();
+        } else {
+            // Обычные глаза
+            this.ctx.beginPath();
+            this.ctx.arc(px - eyeOffsetX, eyeY, size * 0.15, 0, Math.PI * 2);
+            this.ctx.arc(px + eyeOffsetX, eyeY, size * 0.15, 0, Math.PI * 2);
+            this.ctx.fillStyle = '#2c2c2c';
+            this.ctx.fill();
+
+            // Блики в глазах
+            this.ctx.beginPath();
+            this.ctx.arc(px - eyeOffsetX + 2, eyeY - 2, size * 0.06, 0, Math.PI * 2);
+            this.ctx.arc(px + eyeOffsetX + 2, eyeY - 2, size * 0.06, 0, Math.PI * 2);
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.fill();
+        }
 
         // Нос
         this.ctx.beginPath();
@@ -186,24 +273,55 @@ class Renderer {
         this.ctx.fillStyle = GAME_CONSTANTS.COLORS.FOXY_NOSE;
         this.ctx.fill();
 
-        // Хвостик
+        // Улучшение 3: рот в зависимости от эмоции
+        const mouthState = player.emotionMouthState || 'normal';
+        this._drawFoxyMouth(px, drawY, size, mouthState, player.emotionIntensity);
+
+        // Хвостик (безвольный при грусти)
         this.ctx.save();
         const tailX = px - size * 0.8;
         this.ctx.translate(tailX, drawY + size * 0.2);
-        this.ctx.rotate(player.tailAngle);
+        const tailAngle = player.emotionState === 'sad' ? 0.5 : player.tailAngle;
+        this.ctx.rotate(tailAngle);
         this.ctx.beginPath();
         this.ctx.ellipse(0, 0, size * 0.6, size * 0.25, -0.3, 0, Math.PI * 2);
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.FOXY_TAIL;
+        this.ctx.fillStyle = tailColor;
         this.ctx.fill();
         // Кончик хвоста
         this.ctx.beginPath();
         this.ctx.ellipse(-size * 0.4, 0, size * 0.2, size * 0.15, 0, 0, Math.PI * 2);
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.FOXY_BELLY;
+        this.ctx.fillStyle = bellyColor;
         this.ctx.fill();
         this.ctx.restore();
 
         this.ctx.shadowBlur = 0;
         this.ctx.restore();
+
+        // Улучшение 3: блёстки эмоций
+        for (const sparkle of player.emotionSparkles) {
+            const sx = px + sparkle.x * cs * 0.5;
+            const sy = drawY + sparkle.y * cs * 0.5 - cs * 0.3;
+            this.ctx.globalAlpha = sparkle.alpha;
+            this.ctx.fillStyle = sparkle.color;
+            this.ctx.save();
+            this.ctx.translate(sx, sy);
+            this.ctx.rotate(sparkle.rotation);
+            this._drawStar(0, 0, sparkle.size, 4);
+            this.ctx.restore();
+        }
+        this.ctx.globalAlpha = 1;
+
+        // Улучшение 3: слёзки
+        for (const tear of player.emotionTears) {
+            const tx = px + tear.x * size;
+            const ty = eyeY + tear.y + size * 0.3;
+            this.ctx.globalAlpha = tear.alpha;
+            this.ctx.fillStyle = '#87ceeb';
+            this.ctx.beginPath();
+            this.ctx.ellipse(tx, ty, tear.size * 0.6, tear.size, 0, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        this.ctx.globalAlpha = 1;
 
         // Частицы пыли
         for (const dust of player.dustParticles) {
@@ -215,6 +333,53 @@ class Renderer {
             this.ctx.fill();
         }
         this.ctx.globalAlpha = 1;
+    }
+
+    // Улучшение 3: Отрисовка рта лисёнка в зависимости от эмоции
+    _drawFoxyMouth(px, drawY, size, state, intensity) {
+        const ctx = this.ctx;
+        const mouthY = drawY + size * 0.25;
+
+        switch (state) {
+            case 'smile':
+                // Улыбка
+                ctx.strokeStyle = '#2c2c2c';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(px, mouthY - size * 0.05, size * 0.15, 0.1 * Math.PI, 0.9 * Math.PI);
+                ctx.stroke();
+                break;
+            case 'ooo':
+                // Буква О (удивление)
+                ctx.fillStyle = '#2c2c2c';
+                ctx.beginPath();
+                ctx.ellipse(px, mouthY, size * 0.08 * intensity, size * 0.12 * intensity, 0, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+            case 'sad':
+                // Перевёрнутая улыбка
+                ctx.strokeStyle = '#2c2c2c';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(px, mouthY + size * 0.1, size * 0.12, 1.1 * Math.PI, 1.9 * Math.PI);
+                ctx.stroke();
+                break;
+            case 'yawn':
+                // Зевота — большой открытый рот
+                ctx.fillStyle = '#2c2c2c';
+                ctx.beginPath();
+                ctx.ellipse(px, mouthY, size * 0.12, size * 0.18 * intensity, 0, 0, Math.PI * 2);
+                ctx.fill();
+                // Язычок
+                ctx.fillStyle = '#ff8a80';
+                ctx.beginPath();
+                ctx.ellipse(px, mouthY + size * 0.08, size * 0.06, size * 0.08, 0, 0, Math.PI);
+                ctx.fill();
+                break;
+            default:
+                // Нормальный — маленькая точка
+                break;
+        }
     }
 
 
@@ -698,6 +863,14 @@ class Renderer {
         this.ctx.fillText('Пауза', this.width / 2, this.height / 2);
         this.ctx.font = '18px Arial';
         this.ctx.fillText('Нажмите чтобы продолжить', this.width / 2, this.height / 2 + 40);
+        
+        // Улучшение 1: иконка гардероба в паузе
+        this.ctx.font = '12px Arial';
+        this.ctx.fillStyle = '#ffd700';
+        this.ctx.fillText('Гардероб', 30, 35);
+        this.ctx.font = '18px Arial';
+        this.ctx.fillText('👕', 30, 18);
+        
         this.ctx.textAlign = 'left';
     }
 
@@ -729,7 +902,7 @@ class Renderer {
     }
 
     // === СТАРТОВЫЙ ЭКРАН ===
-    drawMenuScreen(hasSave, time) {
+    drawMenuScreen(hasSave, time, crystalBalance) {
         this.ctx.fillStyle = GAME_CONSTANTS.COLORS.BACKGROUND;
         this.ctx.fillRect(0, 0, this.width, this.height);
 
@@ -745,8 +918,15 @@ class Renderer {
         this.ctx.fillText('Магия процедурных миров', this.width / 2, 155);
         this.ctx.shadowBlur = 0;
 
+        // Баланс кристаллов (Улучшение 1)
+        if (crystalBalance !== undefined) {
+            this.ctx.font = '14px Arial';
+            this.ctx.fillStyle = '#64b5f6';
+            this.ctx.fillText(`Кристаллы: ${crystalBalance}`, this.width / 2, 180);
+        }
+
         // Лисёнок (машет лапкой)
-        const foxyY = 280 + Math.sin(time * 0.002) * 5;
+        const foxyY = 270 + Math.sin(time * 0.002) * 5;
         this._drawMenuFoxy(this.width / 2, foxyY, time);
 
         // Кнопка "Играть"
@@ -756,6 +936,9 @@ class Renderer {
         if (hasSave) {
             this._drawButton(this.width / 2, 500, 160, 50, 'Продолжить', GAME_CONSTANTS.COLORS.PORTAL_PRIMARY);
         }
+
+        // Улучшение 1: Кнопка "Гардероб"
+        this._drawButton(this.width / 2, 570, 160, 50, 'Гардероб', '#ffd700');
 
         this.ctx.textAlign = 'left';
     }
@@ -906,6 +1089,469 @@ class Renderer {
         ctx.beginPath();
         ctx.arc(x, y + size * 0.4, size * 0.2, Math.PI, 0);
         ctx.stroke();
+    }
+
+    // ======================================================================
+    // УЛУЧШЕНИЕ 1: Отрисовка экрана Волшебного Гардероба
+    // ======================================================================
+    drawShopScreen(shop, time) {
+        const ctx = this.ctx;
+        const w = this.width;
+        const h = this.height;
+
+        // Фон
+        ctx.fillStyle = '#0d0520';
+        ctx.fillRect(0, 0, w, h);
+        
+        // Магические частицы фона
+        ctx.globalAlpha = 0.3;
+        for (let i = 0; i < 20; i++) {
+            const x = (Math.sin(time * 0.001 + i * 1.7) + 1) * w / 2;
+            const y = (Math.cos(time * 0.0008 + i * 2.3) + 1) * h / 2;
+            ctx.fillStyle = ['#9c27b0', '#e040fb', '#ffd700', '#64b5f6'][i % 4];
+            ctx.beginPath();
+            ctx.arc(x, y, 2 + Math.sin(time * 0.003 + i) * 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        // Заголовок
+        ctx.font = 'bold 24px Arial';
+        ctx.fillStyle = '#ffd700';
+        ctx.textAlign = 'center';
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 10;
+        ctx.fillText('Волшебный Гардероб', w / 2, 40);
+        ctx.shadowBlur = 0;
+
+        // Баланс кристаллов
+        ctx.font = 'bold 16px Arial';
+        ctx.fillStyle = '#64b5f6';
+        ctx.fillText(`Кристаллы: ${shop.getCrystals()}`, w / 2, 70);
+
+        // Кнопка закрытия
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.beginPath();
+        ctx.arc(w - 30, 30, 15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(w - 37, 23);
+        ctx.lineTo(w - 23, 37);
+        ctx.moveTo(w - 23, 23);
+        ctx.lineTo(w - 37, 37);
+        ctx.stroke();
+
+        // Сетка скинов (2 колонки)
+        const gridStartX = 30;
+        const gridStartY = 100;
+        const cellW = (w - 80) / 2;
+        const cellH = 100;
+        const gap = 10;
+
+        for (let i = 0; i < SKINS_DATA.length; i++) {
+            const skin = SKINS_DATA[i];
+            const col = i % 2;
+            const row = Math.floor(i / 2);
+            const cx = gridStartX + col * (cellW + gap);
+            const cy = gridStartY + row * (cellH + gap) - shop.scrollOffset;
+
+            // Пропускаем вне экрана
+            if (cy + cellH < 80 || cy > h) continue;
+
+            const isOwned = shop.isOwned(i);
+            const isActive = shop.activeSkinId === i;
+            const canBuy = shop.canBuy(i);
+
+            // Фон карточки
+            if (isActive) {
+                ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+                ctx.strokeStyle = '#4caf50';
+            } else if (isOwned) {
+                ctx.fillStyle = 'rgba(100, 181, 246, 0.2)';
+                ctx.strokeStyle = '#64b5f6';
+            } else if (canBuy) {
+                ctx.fillStyle = 'rgba(255, 215, 0, 0.15)';
+                ctx.strokeStyle = '#ffd700';
+            } else {
+                ctx.fillStyle = 'rgba(80, 80, 80, 0.3)';
+                ctx.strokeStyle = '#555555';
+            }
+
+            // Скругленный прямоугольник
+            this._drawRoundedRect(cx, cy, cellW, cellH, 8);
+            ctx.fill();
+            ctx.lineWidth = isActive ? 2 : 1;
+            this._drawRoundedRect(cx, cy, cellW, cellH, 8);
+            ctx.stroke();
+
+            // Мини-лисёнок с цветами скина (или вопросительный знак)
+            if (isOwned || canBuy) {
+                this._drawMiniSkinPreview(cx + 30, cy + cellH / 2, skin, time);
+            } else {
+                // Серый силуэт с вопросительным знаком
+                ctx.fillStyle = '#555555';
+                ctx.beginPath();
+                ctx.arc(cx + 30, cy + cellH / 2, 18, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.font = 'bold 18px Arial';
+                ctx.fillStyle = '#888888';
+                ctx.textAlign = 'center';
+                ctx.fillText('?', cx + 30, cy + cellH / 2 + 6);
+            }
+
+            // Название
+            ctx.font = 'bold 12px Arial';
+            ctx.fillStyle = isOwned ? '#ffffff' : (canBuy ? '#ffd700' : '#888888');
+            ctx.textAlign = 'left';
+            ctx.fillText(skin.name, cx + 60, cy + 25);
+
+            // Цена или статус
+            ctx.font = '11px Arial';
+            if (isActive) {
+                ctx.fillStyle = '#4caf50';
+                ctx.fillText('Надето', cx + 60, cy + 45);
+            } else if (isOwned) {
+                ctx.fillStyle = '#64b5f6';
+                ctx.fillText('Нажми чтобы надеть', cx + 60, cy + 45);
+            } else {
+                ctx.fillStyle = canBuy ? '#ffd700' : '#ff5252';
+                ctx.fillText(`${skin.price} кристаллов`, cx + 60, cy + 45);
+            }
+
+            // Описание
+            ctx.font = '10px Arial';
+            ctx.fillStyle = '#aaaaaa';
+            ctx.fillText(skin.description.substring(0, 28), cx + 60, cy + 65);
+            if (skin.description.length > 28) {
+                ctx.fillText(skin.description.substring(28, 56), cx + 60, cy + 80);
+            }
+
+            // Индикатор уровня (звёздочки по тиру)
+            for (let s = 0; s < skin.tier; s++) {
+                ctx.fillStyle = isOwned ? '#ffd700' : '#555555';
+                ctx.font = '8px Arial';
+                ctx.fillText('★', cx + 60 + s * 10, cy + cellH - 8);
+            }
+        }
+
+        // Подсказка внизу
+        ctx.font = '12px Arial';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.textAlign = 'center';
+        ctx.fillText('Собирай кристаллы в лабиринтах!', w / 2, h - 15);
+        ctx.textAlign = 'left';
+    }
+
+    // Мини-превью скина (маленький лисёнок с цветами)
+    _drawMiniSkinPreview(x, y, skin, time) {
+        const ctx = this.ctx;
+        const size = 16;
+
+        // Свечение
+        if (skin.glowIntensity > 5) {
+            ctx.shadowColor = skin.glowColor;
+            ctx.shadowBlur = skin.glowIntensity * 0.5;
+        }
+
+        // Тело
+        ctx.beginPath();
+        ctx.ellipse(x, y, size, size * 1.1, 0, 0, Math.PI * 2);
+        ctx.fillStyle = skin.bodyColor;
+        ctx.fill();
+
+        // Животик
+        ctx.beginPath();
+        ctx.ellipse(x, y + size * 0.3, size * 0.5, size * 0.5, 0, 0, Math.PI * 2);
+        ctx.fillStyle = skin.bellyColor;
+        ctx.fill();
+
+        // Ушки
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.5, y - size * 0.7);
+        ctx.lineTo(x - size * 0.2, y - size * 1.3);
+        ctx.lineTo(x + size * 0.1, y - size * 0.7);
+        ctx.fillStyle = skin.earsColor;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.1, y - size * 0.7);
+        ctx.lineTo(x + size * 0.2, y - size * 1.3);
+        ctx.lineTo(x + size * 0.5, y - size * 0.7);
+        ctx.fill();
+
+        // Глазки
+        ctx.fillStyle = '#2c2c2c';
+        ctx.beginPath();
+        ctx.arc(x - size * 0.2, y - size * 0.15, 2, 0, Math.PI * 2);
+        ctx.arc(x + size * 0.2, y - size * 0.15, 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+
+        // Аксессуары для тиров 2+
+        if (skin.accessory === 'wreath') {
+            ctx.strokeStyle = '#4caf50';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y - size * 0.9, size * 0.5, 0.8 * Math.PI, 0.2 * Math.PI);
+            ctx.stroke();
+            // Листочки
+            ctx.fillStyle = '#66bb6a';
+            ctx.beginPath();
+            ctx.ellipse(x - size * 0.4, y - size * 1.1, 3, 2, -0.3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(x + size * 0.3, y - size * 1.0, 3, 2, 0.3, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (skin.accessory === 'pirate_hat') {
+            ctx.fillStyle = '#2c2c2c';
+            ctx.beginPath();
+            ctx.moveTo(x - size * 0.6, y - size * 1.2);
+            ctx.lineTo(x, y - size * 1.8);
+            ctx.lineTo(x + size * 0.6, y - size * 1.2);
+            ctx.closePath();
+            ctx.fill();
+            // Черепушка
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(x, y - size * 1.35, 2, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (skin.accessory === 'shadow_crown') {
+            // Корона из теней
+            const pulse = Math.sin(time * 0.003) * 2;
+            ctx.fillStyle = '#9c27b0';
+            ctx.shadowColor = '#9c27b0';
+            ctx.shadowBlur = 5 + pulse;
+            ctx.beginPath();
+            const crownY = y - size * 1.3;
+            ctx.moveTo(x - size * 0.5, crownY);
+            ctx.lineTo(x - size * 0.3, crownY - size * 0.4);
+            ctx.lineTo(x, crownY - size * 0.15);
+            ctx.lineTo(x + size * 0.3, crownY - size * 0.4);
+            ctx.lineTo(x + size * 0.5, crownY);
+            ctx.closePath();
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        } else if (skin.accessory === 'galaxy_crown') {
+            // Звёздная корона
+            ctx.fillStyle = '#ffd700';
+            ctx.shadowColor = '#ffd700';
+            ctx.shadowBlur = 8;
+            this._drawStar(x, y - size * 1.4, 6, 5);
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    // Отрисовка анимации покупки скина
+    drawPurchaseAnimation(shop, time) {
+        if (!shop.purchaseAnimation) return;
+        const ctx = this.ctx;
+        const anim = shop.purchaseAnimation;
+        const w = this.width;
+        const h = this.height;
+        const progress = shop.purchasePhase / shop.purchaseDuration;
+        const skin = SKINS_DATA[anim.skinId];
+
+        // Затемнение
+        ctx.fillStyle = `rgba(0, 0, 0, ${anim.flashAlpha})`;
+        ctx.fillRect(0, 0, w, h);
+
+        // Силуэт лисёнка в центре
+        const cx = w / 2;
+        const cy = h / 2;
+        const foxySize = 40;
+
+        // Свечение вокруг лисёнка
+        if (progress > 0.1) {
+            const glowSize = 60 + Math.sin(time * 0.01) * 10;
+            const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowSize);
+            grad.addColorStop(0, skin.glowColor);
+            grad.addColorStop(1, 'transparent');
+            ctx.globalAlpha = Math.min(1, progress * 2) * 0.6;
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(cx, cy, glowSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+
+        // Лисёнок (переходит от оранжевого к цвету скина)
+        const t = Math.min(1, (progress - 0.3) / 0.4);
+        const bodyColor = t > 0 ? skin.bodyColor : GAME_CONSTANTS.COLORS.FOXY_BODY;
+        
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, foxySize, foxySize * 1.1, 0, 0, Math.PI * 2);
+        ctx.fillStyle = bodyColor;
+        ctx.fill();
+
+        // Расходящиеся волны света
+        if (anim.waveRadius > 0) {
+            ctx.strokeStyle = skin.glowColor;
+            ctx.lineWidth = 3;
+            ctx.globalAlpha = Math.max(0, 1 - anim.waveRadius / 300);
+            ctx.beginPath();
+            ctx.arc(cx, cy, anim.waveRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+
+        // Частицы фейерверков
+        for (const p of anim.particles) {
+            const alpha = p.life / p.maxLife;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        // Текст с названием скина (появляется в конце)
+        if (progress > 0.7) {
+            const textAlpha = (progress - 0.7) / 0.3;
+            ctx.globalAlpha = textAlpha;
+            ctx.font = 'bold 22px Arial';
+            ctx.fillStyle = skin.glowColor;
+            ctx.textAlign = 'center';
+            ctx.shadowColor = skin.glowColor;
+            ctx.shadowBlur = 10;
+            ctx.fillText(skin.name, cx, cy + 80);
+            ctx.font = '14px Arial';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('Облик получен!', cx, cy + 105);
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
+        }
+
+        ctx.textAlign = 'left';
+    }
+
+    // Вспомогательный: скруглённый прямоугольник
+    _drawRoundedRect(x, y, w, h, r) {
+        const ctx = this.ctx;
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+    }
+
+    // === ОТРИСОВКА СКИНА В ИГРЕ (поверх базового лисёнка) ===
+    drawSkinEffects(player, skin, time) {
+        if (!skin) return;
+        const ctx = this.ctx;
+        const cs = this.cellSize;
+        const emotionJump = player.emotionJumpOffset || 0;
+        const px = this.offsetX + player.pixelX + cs / 2;
+        const py = this.offsetY + player.pixelY + cs / 2 - player.bounceOffset - emotionJump;
+        const drawY = player.isVictory ? py - player.victoryJump : py;
+        const size = cs * 0.35;
+
+        // Эффекты по тиру
+        if (skin.effect === 'fire') {
+            // Огненный хвост — мерцающие частицы огня
+            for (let i = 0; i < 3; i++) {
+                const fx = px - size * 0.8 + (Math.random() - 0.5) * 10;
+                const fy = drawY + size * 0.2 + (Math.random() - 0.5) * 5;
+                ctx.globalAlpha = 0.5 + Math.random() * 0.5;
+                ctx.fillStyle = ['#ff4400', '#ff8800', '#ffcc00'][Math.floor(Math.random() * 3)];
+                ctx.beginPath();
+                ctx.arc(fx, fy - Math.random() * 8, 2 + Math.random() * 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        } else if (skin.effect === 'ice') {
+            // Ледяной блеск — снежинки вокруг
+            ctx.globalAlpha = 0.6;
+            for (let i = 0; i < 4; i++) {
+                const angle = time * 0.002 + i * Math.PI / 2;
+                const fx = px + Math.cos(angle) * size * 1.2;
+                const fy = drawY + Math.sin(angle) * size * 1.2;
+                ctx.fillStyle = '#b3e5fc';
+                ctx.beginPath();
+                ctx.arc(fx, fy, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        } else if (skin.effect === 'ghost') {
+            // Призрачный шлейф
+            ctx.globalAlpha = 0.2;
+            ctx.fillStyle = '#82b1ff';
+            ctx.beginPath();
+            ctx.ellipse(px, drawY, size * 1.3, size * 1.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        } else if (skin.effect === 'cosmic') {
+            // Звёзды внутри силуэта
+            ctx.save();
+            ctx.beginPath();
+            ctx.ellipse(px, drawY, size, size * 1.1, 0, 0, Math.PI * 2);
+            ctx.clip();
+            for (let i = 0; i < 8; i++) {
+                const sx = px + Math.sin(time * 0.001 + i * 2) * size * 0.7;
+                const sy = drawY + Math.cos(time * 0.0015 + i * 1.5) * size * 0.8;
+                ctx.fillStyle = '#ffffff';
+                ctx.globalAlpha = 0.5 + Math.sin(time * 0.005 + i) * 0.5;
+                ctx.beginPath();
+                ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+            ctx.restore();
+        } else if (skin.effect === 'shadow_king') {
+            // Пульсирующая аура
+            const pulse = Math.sin(time * 0.003) * 5;
+            ctx.globalAlpha = 0.3;
+            const grad = ctx.createRadialGradient(px, drawY, size, px, drawY, size * 2 + pulse);
+            grad.addColorStop(0, '#9c27b0');
+            grad.addColorStop(1, 'transparent');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(px, drawY, size * 2 + pulse, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        } else if (skin.effect === 'galaxy') {
+            // Галактические рукава
+            ctx.save();
+            ctx.beginPath();
+            ctx.ellipse(px, drawY, size * 1.2, size * 1.3, 0, 0, Math.PI * 2);
+            ctx.clip();
+            
+            ctx.globalAlpha = 0.6;
+            for (let arm = 0; arm < 3; arm++) {
+                const baseAngle = time * 0.001 + arm * Math.PI * 2 / 3;
+                for (let j = 0; j < 6; j++) {
+                    const dist = j * size * 0.2;
+                    const angle = baseAngle + j * 0.3;
+                    const sx = px + Math.cos(angle) * dist;
+                    const sy = drawY + Math.sin(angle) * dist;
+                    ctx.fillStyle = ['#ffd700', '#ff69b4', '#87ceeb'][arm];
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, 1.5 - j * 0.1, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            ctx.globalAlpha = 1;
+            ctx.restore();
+        }
+
+        // Свечение для тиров 3+
+        if (skin.glowIntensity >= 10) {
+            ctx.shadowColor = skin.glowColor;
+            ctx.shadowBlur = skin.glowIntensity * 0.3 + Math.sin(time * 0.003) * 3;
+            ctx.beginPath();
+            ctx.ellipse(px, drawY, size * 0.3, size * 0.3, 0, 0, Math.PI * 2);
+            ctx.fillStyle = 'transparent';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
     }
 
     // === БОНУС-КОМНАТА ===
