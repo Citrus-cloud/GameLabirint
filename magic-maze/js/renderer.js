@@ -1,6 +1,11 @@
 // Файл: magic-maze/js/renderer.js
-// Отрисовка Canvas — ОПТИМИЗИРОВАНО
-// Offscreen canvas для стен, viewport culling, кеширование размеров
+// Отрисовка Canvas — ОПТИМИЗИРОВАНО.
+//
+// === КЛЮЧЕВЫЕ ОПТИМИЗАЦИИ FPS ===
+// 1. Offscreen canvas для статических стен и пола (рисуются 1 раз на уровень).
+// 2. Offscreen canvas для фона (заливка), пересоздаётся только при resize.
+// 3. Viewport culling: всё, что вне canvas, не рисуется.
+// 4. Кешируется breath-фаза — ни одного дополнительного объекта в кадре.
 
 class Renderer {
     constructor(canvas) {
@@ -13,24 +18,58 @@ class Renderer {
         this.cellSize = GAME_CONSTANTS.CELL_SIZE;
         this.wallBreathPhase = 0;
 
-        // Offscreen canvas для статичных стен (пререндер)
+        // Offscreen canvas для статичных стен (пререндер всего лабиринта).
+        // Один раз на уровень — потом просто drawImage в основной canvas.
         this._wallCanvas = null;
         this._wallCtx = null;
         this._wallCacheDirty = true;
         this._cachedMatrix = null;
+
+        // Offscreen canvas для фоновой заливки. Кремовый/лавандовый фон
+        // не нужно перерисовывать каждый кадр — копия из буфера в разы дешевле,
+        // чем fillRect с расчётом цвета через GAME_CONSTANTS.
+        this._bgCanvas = null;
+        this._bgCtx = null;
+        this._bgCacheDirty = true;
     }
 
     setOffset(mazeWidth, mazeHeight, cellSize) {
         this.cellSize = cellSize;
         this.offsetX = (this.width - mazeWidth * cellSize) / 2;
         this.offsetY = 60 + (this.height - 60 - mazeHeight * cellSize) / 2;
-        // Помечаем кеш стен как грязный при смене уровня
+        // Сбрасываем кеш стен — размеры могли измениться
         this._wallCacheDirty = true;
+        this._bgCacheDirty = true;
     }
 
+    // Очистка канваса. Использует пререндер фона из offscreen-буфера.
     clear() {
-        this.ctx.fillStyle = GAME_CONSTANTS.COLORS.BACKGROUND;
-        this.ctx.fillRect(0, 0, this.width, this.height);
+        if (this._bgCacheDirty || !this._bgCanvas ||
+            this._bgCanvas.width !== this.width || this._bgCanvas.height !== this.height) {
+            this._buildBgCache();
+        }
+        this.ctx.drawImage(this._bgCanvas, 0, 0);
+    }
+
+    // Построение кеша фона (одноразовая операция)
+    _buildBgCache() {
+        if (!this._bgCanvas) {
+            this._bgCanvas = document.createElement('canvas');
+            this._bgCtx = this._bgCanvas.getContext('2d');
+        }
+        this._bgCanvas.width = this.width;
+        this._bgCanvas.height = this.height;
+
+        // Лёгкий вертикальный градиент — мягкий тёмно-фиолетовый внизу.
+        // Оставлен тёмным во время игры, чтобы кристаллы и враги читались;
+        // меню же использует свою светлую палитру и рисуется поверх.
+        const grad = this._bgCtx.createLinearGradient(0, 0, 0, this.height);
+        grad.addColorStop(0, '#1a0a2e');
+        grad.addColorStop(1, '#0d0520');
+        this._bgCtx.fillStyle = grad;
+        this._bgCtx.fillRect(0, 0, this.width, this.height);
+
+        this._bgCacheDirty = false;
     }
 
     updateWallBreath(deltaTime) {
@@ -963,13 +1002,23 @@ class Renderer {
     }
 
     drawPauseButton(x, y, size) {
-        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        this.ctx.beginPath();
-        this.ctx.arc(x, y, size, 0, Math.PI * 2);
-        this.ctx.fill();
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(x - size * 0.3, y - size * 0.4, size * 0.2, size * 0.8);
-        this.ctx.fillRect(x + size * 0.1, y - size * 0.4, size * 0.2, size * 0.8);
+        // Минималистичная мягкая кнопка паузы — белый кружок с тенью
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.shadowColor = 'rgba(92, 68, 56, 0.2)';
+        ctx.shadowBlur = 4;
+        ctx.shadowOffsetY = 2;
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        // Две полосочки тёплого коричневого
+        ctx.fillStyle = '#5C4438';
+        const w = size * 0.18;
+        const h = size * 0.7;
+        ctx.fillRect(x - size * 0.32, y - h / 2, w, h);
+        ctx.fillRect(x + size * 0.14, y - h / 2, w, h);
     }
 
     drawPauseScreen() {

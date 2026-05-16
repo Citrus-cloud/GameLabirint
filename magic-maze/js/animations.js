@@ -1,6 +1,9 @@
 // Файл: magic-maze/js/animations.js
 // Система анимаций и частиц — ОПТИМИЗИРОВАНО
-// Лимит фоновых частиц: 4 светлячка (крупные), общий лимит 80 частиц
+// Жёсткий лимит частиц: 60 (по ТЗ).
+// Светлячков на уровне: 3, движение по синусоиде, без сложной логики.
+// Используется ПУЛ объектов: при превышении лимита вытесняем самые старые,
+// но сами объекты-частицы переиспользуются (минимум аллокаций GC).
 
 class ParticleSystem {
     constructor() {
@@ -8,24 +11,38 @@ class ParticleSystem {
         this.fireflies = [];
         this.screenEffects = [];
         this.textPopups = [];
-        // Глобальный лимит активных частиц
-        this.MAX_PARTICLES = 80;
-        // Инициализация светлячков (3-5 штук, крупнее)
+        // Жёсткий лимит активных частиц (по ТЗ — 60).
+        this.MAX_PARTICLES = 60;
+        // Пул переиспользуемых частиц для снижения нагрузки на GC.
+        this._pool = [];
         this._initFireflies();
     }
 
-    // Создать фоновых светлячков (уменьшено до 4, увеличен размер)
+    // Получить готовый объект частицы из пула (или создать новый)
+    _acquire() {
+        return this._pool.pop() || {};
+    }
+
+    // Вернуть частицу в пул
+    _release(p) {
+        if (this._pool.length < 128) this._pool.push(p);
+    }
+
+    // 3 светлячка — простая синусоида, без сложной анимации (по ТЗ)
     _initFireflies() {
         this.fireflies = [];
-        const count = 4; // Было 8, теперь 4
+        const count = 3;
         for (let i = 0; i < count; i++) {
             this.fireflies.push({
-                x: Math.random() * 500,
-                y: Math.random() * 700,
-                vx: (Math.random() - 0.5) * 0.2,
-                vy: (Math.random() - 0.5) * 0.2,
+                // baseX/baseY — точка, вокруг которой светлячок колеблется по синусу
+                baseX: 80 + i * 160,
+                baseY: 200 + (i * 90) % 300,
+                ampX: 30 + Math.random() * 20,
+                ampY: 20 + Math.random() * 15,
+                x: 0, y: 0,
                 phase: Math.random() * Math.PI * 2,
-                size: 4 + Math.random() * 4, // Крупнее (было 2-5, теперь 4-8)
+                speed: 0.0008 + Math.random() * 0.0006,
+                size: 4 + Math.random() * 3,
                 brightness: 0
             });
         }
@@ -33,75 +50,69 @@ class ParticleSystem {
 
     // Обновить все частицы
     update(deltaTime) {
-        // Обновление светлячков
+        // Светлячки — простое движение по синусоиде вокруг базовой точки.
+        // Без накопления скоростей и отскоков — это в разы дешевле.
         for (const ff of this.fireflies) {
-            ff.phase += deltaTime * 0.0015;
-            ff.brightness = 0.3 + Math.sin(ff.phase) * 0.7;
-            ff.x += ff.vx * (deltaTime / 16);
-            ff.y += ff.vy * (deltaTime / 16);
-
-            // Мягкий отскок от краёв
-            if (ff.x < 0 || ff.x > 500) ff.vx *= -1;
-            if (ff.y < 0 || ff.y > 700) ff.vy *= -1;
-
-            // Редкое изменение направления
-            if (Math.random() < 0.01) {
-                ff.vx += (Math.random() - 0.5) * 0.05;
-                ff.vy += (Math.random() - 0.5) * 0.05;
-            }
-            ff.vx = Math.max(-0.3, Math.min(0.3, ff.vx));
-            ff.vy = Math.max(-0.3, Math.min(0.3, ff.vy));
+            ff.phase += deltaTime * ff.speed;
+            ff.brightness = 0.3 + Math.sin(ff.phase * 1.7) * 0.7;
+            ff.x = ff.baseX + Math.sin(ff.phase) * ff.ampX;
+            ff.y = ff.baseY + Math.cos(ff.phase * 0.8) * ff.ampY;
         }
 
-        // Обновление частиц
+        // Обновление частиц (с возвратом в пул)
+        const dt16 = deltaTime / 16;
         for (let i = this.particles.length - 1; i >= 0; i--) {
             const p = this.particles[i];
             p.life -= deltaTime;
-            p.x += p.vx * (deltaTime / 16);
-            p.y += p.vy * (deltaTime / 16);
-            p.vy += (p.gravity || 0) * (deltaTime / 16);
+            p.x += p.vx * dt16;
+            p.y += p.vy * dt16;
+            p.vy += (p.gravity || 0) * dt16;
             p.alpha = Math.max(0, p.life / p.maxLife);
             p.size *= p.shrink || 0.99;
 
             if (p.rotation !== undefined) {
-                p.rotation += p.rotationSpeed * (deltaTime / 16);
+                p.rotation += p.rotationSpeed * dt16;
             }
 
             if (p.life <= 0) {
                 this.particles.splice(i, 1);
+                this._release(p);
             }
         }
 
-        // Обновление экранных эффектов
+        // Экранные эффекты
         for (let i = this.screenEffects.length - 1; i >= 0; i--) {
             const effect = this.screenEffects[i];
             effect.life -= deltaTime;
             effect.alpha = effect.life / effect.maxLife;
-            if (effect.life <= 0) {
-                this.screenEffects.splice(i, 1);
-            }
+            if (effect.life <= 0) this.screenEffects.splice(i, 1);
         }
 
-        // Обновление текстовых всплывашек
+        // Текстовые всплывашки
         for (let i = this.textPopups.length - 1; i >= 0; i--) {
             const popup = this.textPopups[i];
             popup.life -= deltaTime;
             popup.y -= deltaTime * 0.03;
             popup.alpha = popup.life / popup.maxLife;
             popup.scale = 1 + (1 - popup.alpha) * 0.3;
-            if (popup.life <= 0) {
-                this.textPopups.splice(i, 1);
-            }
+            if (popup.life <= 0) this.textPopups.splice(i, 1);
         }
     }
 
-    // Добавить частицу с проверкой лимита
+    // Добавить частицу с проверкой лимита (через пул)
     _addParticle(p) {
         if (this.particles.length >= this.MAX_PARTICLES) {
-            // Удаляем самую старую частицу
-            this.particles.shift();
+            // При превышении лимита — переиспользуем самую старую частицу.
+            const old = this.particles.shift();
+            // Копируем поля без новой аллокации
+            Object.assign(old, p);
+            this.particles.push(old);
+            return;
         }
-        this.particles.push(p);
+        // Берём из пула, чтобы не создавать новый объект
+        const slot = this._acquire();
+        Object.assign(slot, p);
+        this.particles.push(slot);
     }
 
     // === ЭФФЕКТЫ СБОРА КРИСТАЛЛА ===

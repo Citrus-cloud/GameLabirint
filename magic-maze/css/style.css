@@ -1,5 +1,7 @@
 /* Файл: magic-maze/css/style.css */
-/* Стили для игры "Сказочный лабиринт: Магия процедурных миров" */
+/* Минималистичный детский стиль: мягкие кремовые тона, без неоновых теней.
+   touch-action: none — гарантирует, что браузер не перехватит свайпы (важно для отзывчивости).
+*/
 
 * {
     margin: 0;
@@ -11,8 +13,10 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background-color: #0d0520;
-    font-family: Arial, sans-serif;
+    /* Нежно-кремовый фон под canvas — продолжает палитру меню */
+    background-color: #FFF8F0;
+    font-family: "Comic Sans MS", "Marker Felt", system-ui, -apple-system, sans-serif;
+    color: #5C4438;
 }
 
 body {
@@ -20,10 +24,15 @@ body {
     justify-content: center;
     align-items: center;
     min-height: 100vh;
+    /* Запрет любых жестов браузера на canvas — ключ к мгновенной отзывчивости.
+       Без этого Chrome/Safari могут добавить ~300ms задержку на double-tap. */
     touch-action: none;
     -webkit-touch-callout: none;
     -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
     user-select: none;
+    /* Чтобы pull-to-refresh не срабатывал при свайпах вниз */
+    overscroll-behavior: none;
 }
 
 #gameCanvas {
@@ -32,11 +41,17 @@ body {
     max-height: 700px;
     width: 100vw;
     height: 100vh;
-    border-radius: 8px;
-    box-shadow: 0 0 30px rgba(155, 89, 182, 0.3);
+    border-radius: 16px;
+    /* Мягкая тень в духе нового меню — без неоновых эффектов */
+    box-shadow: 0 4px 20px rgba(92, 68, 56, 0.12);
+    /* Запрет выделения на canvas */
+    -webkit-user-select: none;
+    user-select: none;
+    /* Отключаем стандартные жесты на самом canvas */
+    touch-action: none;
 }
 
-/* Адаптивность для мобильных */
+/* Адаптивность: на узких экранах canvas занимает всё */
 @media (max-width: 520px) {
     #gameCanvas {
         width: 100vw;
@@ -44,6 +59,7 @@ body {
         max-width: 100vw;
         max-height: 100vh;
         border-radius: 0;
+        box-shadow: none;
     }
 }
 

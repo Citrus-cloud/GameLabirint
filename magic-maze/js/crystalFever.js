@@ -30,8 +30,8 @@ class CrystalFeverSystem {
         this.playerGridX = 0;
         this.playerGridY = 0;
 
-        // Лимит одновременно видимых кристаллов
-        this.MAX_VISIBLE_CRYSTALS = 30;
+        // Жёсткий лимит одновременно видимых кристаллов (по ТЗ — 20).
+        this.MAX_VISIBLE_CRYSTALS = 20;
     }
 
     init(level, matrix, cellSize) {
@@ -271,10 +271,16 @@ class CrystalFeverSystem {
         ctx.restore();
     }
 
-    // Отрисовка кристаллов — УПРОЩЕНА (яркие квадраты, без градиентов, лимит 30)
+    // Отрисовка кристаллов лихорадки — простые яркие квадраты с тенью.
+    // По ТЗ: без внутренней детализации, только виртуальный «глянцевый кубик»,
+    // лимит 20 видимых, остальные не рисуются (они физически собираемы,
+    // но визуально не показываются — игроку проще ориентироваться).
     _renderFeverCrystals(ctx, offsetX, offsetY, time) {
         const cs = this.cellSize;
+        const canvasW = ctx.canvas.width;
+        const canvasH = ctx.canvas.height;
         let visibleCount = 0;
+        const halfSize = cs * 0.18;
 
         for (const crystal of this.feverCrystals) {
             if (crystal.collected) continue;
@@ -283,29 +289,23 @@ class CrystalFeverSystem {
             const px = offsetX + crystal.x * cs + cs / 2;
             const py = offsetY + crystal.y * cs + cs / 2;
 
-            // Проверка видимости на экране
-            if (px < -cs || px > 520 || py < -cs || py > 720) continue;
+            // Viewport culling — не рисуем за пределами canvas
+            if (px < -cs || px > canvasW + cs || py < -cs || py > canvasH + cs) continue;
 
             visibleCount++;
-            const size = cs * 0.18;
 
+            // Простой квадрат с тенью — самый дешёвый способ изобразить кристалл.
             ctx.save();
-            ctx.globalAlpha = crystal.pulseAlpha * 0.85;
-
-            // Упрощённый кристалл — яркий ромб без градиента
+            ctx.globalAlpha = crystal.pulseAlpha * 0.9;
             ctx.fillStyle = crystal.color;
             ctx.shadowColor = crystal.color;
-            ctx.shadowBlur = 6;
-
-            ctx.beginPath();
-            ctx.moveTo(px, py - size);
-            ctx.lineTo(px + size * 0.6, py);
-            ctx.lineTo(px, py + size * 0.5);
-            ctx.lineTo(px - size * 0.6, py);
-            ctx.closePath();
-            ctx.fill();
-
+            ctx.shadowBlur = 5;
+            ctx.fillRect(px - halfSize, py - halfSize, halfSize * 2, halfSize * 2);
             ctx.shadowBlur = 0;
+            // Лёгкий белый блик в углу — делает «кристалличный» вид без градиентов.
+            ctx.globalAlpha = crystal.pulseAlpha * 0.5;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(px - halfSize * 0.7, py - halfSize * 0.7, halfSize * 0.5, halfSize * 0.5);
             ctx.restore();
         }
     }

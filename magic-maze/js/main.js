@@ -1,10 +1,21 @@
 // Файл: magic-maze/js/main.js
-// Инициализация, основной игровой цикл, управление состояниями
-// ОПТИМИЗИРОВАНО: deltaTime с пропуском кадров, кеширование размеров
+// Инициализация, основной игровой цикл, управление состояниями.
+//
+// === КЛЮЧЕВЫЕ ОПТИМИЗАЦИИ ОТЗЫВЧИВОСТИ И FPS ===
+// 1. Ввод обрабатывается через InputManager (input.js), который вызывает
+//    tryMove() СИНХРОННО прямо из обработчика touchmove/keydown.
+//    Это устраняет задержку «один кадр на каждый свайп».
+// 2. Если лисёнок уже в движении — следующий ход буферизуется (1 шт),
+//    и применяется как только текущая клетка достигнута. Никакой блокировки ввода.
+// 3. requestAnimationFrame без искусственного троттлинга: браузер сам выровняет до VSync.
+// 4. Шаг логики врагов фиксированный (200 мс) с интерполяцией между шагами.
+// 5. Fog/туман пересчитывает маску только при смене клетки игрока.
+// 6. Все аккумуляторные таймеры используют deltaTime, ограниченный сверху (50 мс),
+//    чтобы лисёнок не «проскакивал» сквозь стены при пропуске кадра.
 
 class Game {
     constructor() {
-        // Canvas
+        // Canvas и контекст
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
         this.resizeCanvas();
@@ -20,7 +31,7 @@ class Game {
         this.skinEffects = new SkinEffectsSystem();
         this.lightning = new LightningSystem();
 
-        // === НОВЫЕ МЕХАНИКИ ===
+        // Новые механики
         this.crystalRunners = new CrystalRunnerManager();
         this.ghostWalls = new GhostWallSystem();
         this.lineLightning = new LineLightningSystem();
@@ -28,7 +39,7 @@ class Game {
         this.fogLevel = new FogLevelSystem();
         this.crystalFever = new CrystalFeverSystem();
 
-        // === СИСТЕМА МЕНЮ ===
+        // Меню
         this.menu = new MenuSystem(this.canvas, this.ctx);
 
         // Состояние
@@ -51,7 +62,6 @@ class Game {
         this.levelIntroTimer = 0;
         this.levelIntroMaxTime = 2000;
         this.levelCompleteTimer = 0;
-        this.congratsTimer = 0;
 
         // Движущиеся стены
         this.movingWalls = [];
@@ -62,25 +72,27 @@ class Game {
         // Таймер звуков скинов при движении
         this.skinSoundTimer = 0;
 
-        // Управление
-        this.inputQueue = [];
-        this.touchStartX = 0;
-        this.touchStartY = 0;
-        this.swipeThreshold = 30;
+        // Буфер следующего хода (максимум одно направление в очереди)
+        // Никаких массивов: храним только последнее направление, чтобы новый свайп
+        // мгновенно перебивал старый и игрок не «доезжал» по устаревшим командам.
+        this.bufferedDir = null;
 
-        // Оптимизация: минимальный интервал между кадрами (16мс ~ 60fps)
-        this._minFrameInterval = 16;
-        this._lastRenderTime = 0;
+        // Менеджер ввода — все события (touch, mouse, keyboard) проходят через него.
+        // Свайпы вызывают tryMove() СРАЗУ из touchmove (моментальная реакция).
+        this.input = new InputManager(this.canvas);
+        this.input.onDirection = (dir) => this._onDirection(dir);
+        this.input.onTap = (x, y) => this._onTap(x, y);
+        this.input.onPause = () => this._onPauseKey();
 
-        // Привязка событий
-        this._bindEvents();
+        // Ресайз окна
+        window.addEventListener('resize', () => this.resizeCanvas());
 
         // Запуск цикла
         this.lastTime = performance.now();
         requestAnimationFrame((t) => this.gameLoop(t));
     }
 
-    // Адаптивный размер Canvas
+    // Адаптивный размер Canvas с учётом DPR (но рендер всё равно в координатах canvas)
     resizeCanvas() {
         const maxW = Math.min(500, window.innerWidth);
         const maxH = Math.min(700, window.innerHeight);
@@ -89,87 +101,82 @@ class Game {
         if (this.renderer) {
             this.renderer.width = maxW;
             this.renderer.height = maxH;
+            // Сбрасываем кеш стен, т.к. размеры изменились
+            this.renderer.invalidateWallCache();
+        }
+        if (this.menu) {
+            this.menu.width = maxW;
+            this.menu.height = maxH;
         }
     }
 
-    // === ПРИВЯЗКА СОБЫТИЙ ===
-    _bindEvents() {
-        // Клавиши
-        window.addEventListener('keydown', (e) => this._handleKey(e));
-
-        // Тач
-        this.canvas.addEventListener('touchstart', (e) => this._handleTouchStart(e), { passive: false });
-        this.canvas.addEventListener('touchend', (e) => this._handleTouchEnd(e), { passive: false });
-
-        // Клик (для меню и паузы)
-        this.canvas.addEventListener('click', (e) => this._handleClick(e));
-
-        // Ресайз
-        window.addEventListener('resize', () => this.resizeCanvas());
-    }
-
-    _handleKey(e) {
-        if (this.state === GAME_CONSTANTS.STATES.PAUSED) {
-            this.state = GAME_CONSTANTS.STATES.PLAYING;
+    // ======================================================================
+    // ВВОД: МГНОВЕННАЯ РЕАКЦИЯ
+    // Метод вызывается СИНХРОННО из обработчика свайпа/клавиши.
+    // Если игрок не в движении — ход применяется немедленно;
+    // иначе — кладём в bufferedDir, чтобы применить сразу после достижения клетки.
+    // ======================================================================
+    _onDirection(dir) {
+        // Не реагируем в меню/паузе/проигрыше — там это работает только через тапы по кнопкам.
+        if (this.state !== GAME_CONSTANTS.STATES.PLAYING &&
+            this.state !== GAME_CONSTANTS.STATES.BONUS_ROOM) {
             return;
         }
 
-        if (this.state !== GAME_CONSTANTS.STATES.PLAYING && 
-            this.state !== GAME_CONSTANTS.STATES.BONUS_ROOM) return;
-
-        switch (e.key) {
-            case 'ArrowUp': case 'w': case 'W':
-                this.inputQueue.push('up'); break;
-            case 'ArrowDown': case 's': case 'S':
-                this.inputQueue.push('down'); break;
-            case 'ArrowLeft': case 'a': case 'A':
-                this.inputQueue.push('left'); break;
-            case 'ArrowRight': case 'd': case 'D':
-                this.inputQueue.push('right'); break;
-            case 'Escape': case 'p': case 'P':
-                if (this.state === GAME_CONSTANTS.STATES.PLAYING) {
-                    this.state = GAME_CONSTANTS.STATES.PAUSED;
-                }
-                break;
-        }
-    }
-
-    _handleTouchStart(e) {
-        e.preventDefault();
-        const touch = e.touches[0];
-        this.touchStartX = touch.clientX;
-        this.touchStartY = touch.clientY;
-    }
-
-    _handleTouchEnd(e) {
-        e.preventDefault();
-        if (e.changedTouches.length === 0) return;
-        const touch = e.changedTouches[0];
-        const dx = touch.clientX - this.touchStartX;
-        const dy = touch.clientY - this.touchStartY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < this.swipeThreshold) {
-            // Это тап, не свайп
-            this._handleTap(touch.clientX, touch.clientY);
+        // Если идём — буферизуем: новый свайп всегда перетирает старый,
+        // т.е. пользователь чувствует, что игра «слышит» его последнее намерение.
+        if (this.player && this.player.isMoving) {
+            this.bufferedDir = dir;
             return;
         }
 
-        if (this.state !== GAME_CONSTANTS.STATES.PLAYING && 
-            this.state !== GAME_CONSTANTS.STATES.BONUS_ROOM) return;
-
-        if (Math.abs(dx) > Math.abs(dy)) {
-            this.inputQueue.push(dx > 0 ? 'right' : 'left');
-        } else {
-            this.inputQueue.push(dy > 0 ? 'down' : 'up');
-        }
+        // Иначе — пробуем шагнуть прямо сейчас.
+        this._tryMove(dir);
     }
 
-    _handleTap(clientX, clientY) {
-        const rect = this.canvas.getBoundingClientRect();
-        const x = clientX - rect.left;
-        const y = clientY - rect.top;
+    // Попытка движения в направлении dir. Возвращает true, если ход состоялся.
+    _tryMove(dir) {
+        if (!this.player) return false;
 
+        let dx = 0, dy = 0;
+        switch (dir) {
+            case 'up': dy = -1; break;
+            case 'down': dy = 1; break;
+            case 'left': dx = -1; break;
+            case 'right': dx = 1; break;
+            default: return false;
+        }
+
+        const newX = this.player.gridX + dx;
+        const newY = this.player.gridY + dy;
+
+        const matrix = this.state === GAME_CONSTANTS.STATES.BONUS_ROOM
+            ? this.bonusRoom.matrix
+            : this.levelData.matrix;
+
+        // Проверки границ и стен
+        if (newX < 0 || newX >= matrix[0].length || newY < 0 || newY >= matrix.length) return false;
+        if (matrix[newY][newX] === GAME_CONSTANTS.CELL_TYPES.WALL) return false;
+
+        // Движущиеся стены
+        for (const w of this.movingWalls) {
+            if (w.isBlocking && w.pos.x === newX && w.pos.y === newY) return false;
+        }
+        // Призрачные стены
+        if (this.ghostWalls.isBlocked(newX, newY)) return false;
+
+        // Сразу переключаем грид-координаты — это даёт «нулевую задержку» отклика:
+        // визуальная анимация догоняет, но логика игры (столкновения, кристаллы)
+        // моментально отражает новое положение лисёнка.
+        this.player.moveTo(newX, newY);
+        this.player.resetIdleTimer();
+        this.audio.playMove();
+        this.lightning.updatePlayerDirection(dir);
+        return true;
+    }
+
+    // Тап (клик/короткое касание) — для меню и паузы
+    _onTap(x, y) {
         if (this.state === GAME_CONSTANTS.STATES.PAUSED) {
             const btn = this.menu.getButtonAt(x, y, 'pause', false);
             if (btn === 'resume') {
@@ -186,11 +193,9 @@ class Game {
 
         if (this.state === GAME_CONSTANTS.STATES.MENU) {
             const btn = this.menu.getButtonAt(x, y, 'menu', this.storage.hasSave());
-            if (btn === 'play') {
-                this._startNewGame();
-            } else if (btn === 'continue') {
-                this._continueGame();
-            } else if (btn === 'shop') {
+            if (btn === 'play') this._startNewGame();
+            else if (btn === 'continue') this._continueGame();
+            else if (btn === 'shop') {
                 this._shopReturnState = GAME_CONSTANTS.STATES.MENU;
                 this.state = GAME_CONSTANTS.STATES.SHOP;
                 this.skinShop.open();
@@ -200,9 +205,8 @@ class Game {
 
         if (this.state === GAME_CONSTANTS.STATES.GAME_OVER) {
             const btn = this.menu.getButtonAt(x, y, 'gameover', false);
-            if (btn === 'restart') {
-                this._startNewGame();
-            }
+            if (btn === 'restart') this._startNewGame();
+            else if (btn === 'menu') this.state = GAME_CONSTANTS.STATES.MENU;
             return;
         }
 
@@ -221,23 +225,20 @@ class Game {
             return;
         }
 
-        // Пауза: кнопка в правом верхнем углу
+        // Тап во время игры: кнопка паузы в правом верхнем углу
         if (this.state === GAME_CONSTANTS.STATES.PLAYING) {
-            if (x > this.canvas.width - 40 && y < 55) {
+            if (x > this.canvas.width - 44 && y < 55) {
                 this.state = GAME_CONSTANTS.STATES.PAUSED;
             }
         }
     }
 
-    _handleClick(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        this._handleTap(e.clientX, e.clientY);
-    }
-
-    _isButtonPressed(x, y, bx, by, bw, bh) {
-        return x >= bx - bw / 2 && x <= bx + bw / 2 && y >= by - bh / 2 && y <= by + bh / 2;
+    _onPauseKey() {
+        if (this.state === GAME_CONSTANTS.STATES.PLAYING) {
+            this.state = GAME_CONSTANTS.STATES.PAUSED;
+        } else if (this.state === GAME_CONSTANTS.STATES.PAUSED) {
+            this.state = GAME_CONSTANTS.STATES.PLAYING;
+        }
     }
 
     // === НАЧАЛО ИГРЫ ===
@@ -262,11 +263,9 @@ class Game {
         const generator = new MazeGenerator(mazeSize, mazeSize);
         const matrix = generator.generate();
 
-        // Размещение объектов
         const populator = new MazePopulator(matrix, this.level);
         this.levelData = populator.populate();
 
-        // Размеры
         this.mazeWidth = this.levelData.matrix[0].length;
         this.mazeHeight = this.levelData.matrix.length;
 
@@ -277,116 +276,66 @@ class Game {
 
         this.renderer.setOffset(this.mazeWidth, this.mazeHeight, this.cellSize);
 
-        // Игрок
         if (!this.player) {
             this.player = new Player(this.levelData.startPos, this.cellSize);
         } else {
             this.player.resetForNewLevel(this.levelData.startPos, this.cellSize);
         }
 
-        // Враги
         this.enemyManager.init(this.levelData.enemies, this.level, this.cellSize);
-
-        // Усиления
         this.powerUpManager.init(this.levelData.powers, this.cellSize);
 
-        // Портал
         if (this.levelData.portal) {
             this.portal = new Portal(this.levelData.portal, this.cellSize);
         } else {
             this.portal = null;
         }
 
-        // Движущиеся стены
         this.movingWalls = this.levelData.movingWalls || [];
-
-        // Кристаллы как объекты с collected
         this.crystals = this.levelData.crystals.map(c => ({ ...c, collected: false }));
 
-        // Сброс
         this.activePowerEffect = null;
         this.particles.clear();
-        this.inputQueue = [];
+        this.bufferedDir = null;
 
-        // Инициализация системы молний
         this.lightning.init(
-            this.level,
-            this.levelData.matrix,
-            this.cellSize,
-            this.levelData.startPos,
-            this.levelData.finishPos
+            this.level, this.levelData.matrix, this.cellSize,
+            this.levelData.startPos, this.levelData.finishPos
         );
 
-        // === ИНИЦИАЛИЗАЦИЯ НОВЫХ МЕХАНИК ===
-        // Кристалл-непоседа (с 3 уровня)
         this.crystalRunners.init(
-            this.level,
-            this.levelData.matrix,
-            this.cellSize,
-            this.levelData.startPos,
-            this.levelData.finishPos,
-            this.crystals
+            this.level, this.levelData.matrix, this.cellSize,
+            this.levelData.startPos, this.levelData.finishPos, this.crystals
         );
-
-        // Призрачные стены (с 6 уровня)
         this.ghostWalls.init(
-            this.level,
-            this.levelData.matrix,
-            this.levelData.startPos,
-            this.levelData.finishPos,
-            this.cellSize
+            this.level, this.levelData.matrix,
+            this.levelData.startPos, this.levelData.finishPos, this.cellSize
         );
-
-        // Линейная молния (с 7 уровня)
         this.lineLightning.init(this.level);
-
-        // Волшебный цветок-таймер (с 4 уровня)
         this.magicFlowers.init(
-            this.level,
-            this.levelData.matrix,
-            this.cellSize,
-            this.levelData.startPos,
-            this.levelData.finishPos
+            this.level, this.levelData.matrix, this.cellSize,
+            this.levelData.startPos, this.levelData.finishPos
         );
+        this.fogLevel.init(this.level, this.mazeWidth, this.mazeHeight, this.cellSize);
+        if (this.fogLevel.active) this.audio.playFogAmbient && this.audio.playFogAmbient();
 
-        // Туманный уровень (каждый 7-й)
-        this.fogLevel.init(
-            this.level,
-            this.mazeWidth,
-            this.mazeHeight,
-            this.cellSize
-        );
-        if (this.fogLevel.active) {
-            this.audio.playFogAmbient();
-        }
-
-        // Кристальная лихорадка (1/12 шанс с 2 уровня)
         this.crystalFever.init(this.level, this.levelData.matrix, this.cellSize);
-
-        // Сброс эффектов скинов
         this.skinEffects.reset();
 
-        // Показать анимацию начала уровня
         this.state = GAME_CONSTANTS.STATES.LEVEL_INTRO;
         this.levelIntroTimer = 0;
 
-        // Сохранить прогресс
         this.storage.updateLevel(this.level);
     }
 
-
-
-    // === ОСНОВНОЙ ИГРОВОЙ ЦИКЛ (ОПТИМИЗИРОВАН) ===
+    // ======================================================================
+    // ОСНОВНОЙ ИГРОВОЙ ЦИКЛ
+    // Без искусственного троттлинга: браузер сам ограничит до VSync.
+    // deltaTime ограничен сверху 50 мс, чтобы движение не «прыгало» через стены.
+    // ======================================================================
     gameLoop(currentTime) {
         const deltaTime = Math.min(currentTime - this.lastTime, 50);
         this.lastTime = currentTime;
-
-        // Пропуск кадров если слишком часто (не чаще 60fps)
-        if (currentTime - this._lastRenderTime < this._minFrameInterval) {
-            requestAnimationFrame((t) => this.gameLoop(t));
-            return;
-        }
-        this._lastRenderTime = currentTime;
 
         switch (this.state) {
             case GAME_CONSTANTS.STATES.MENU:
@@ -434,6 +383,7 @@ class Game {
     // === ОБНОВЛЕНИЕ МЕНЮ ===
     _updateMenu(deltaTime) {
         this.menu.updateBackground(deltaTime);
+        // Частицы в меню тоже обновляем, но в новом меню их минимум.
         this.particles.update(deltaTime);
     }
 
@@ -452,37 +402,35 @@ class Game {
 
     _renderLevelIntro() {
         const progress = Math.min(this.levelIntroTimer / this.levelIntroMaxTime, 1);
-        this.renderer.drawLevelIntro(this.level, progress);
+        // Используем чистый светлый интро, гармонирующий с новым меню
+        if (this.menu.renderLevelIntro) {
+            this.menu.renderLevelIntro(this.level, progress);
+        } else {
+            this.renderer.drawLevelIntro(this.level, progress);
+        }
     }
 
     // === ОБНОВЛЕНИЕ ИГРЫ ===
     _updatePlaying(deltaTime) {
         const time = performance.now();
 
-        // Обработка ввода
-        this._processInput();
-
-        // Обновление игрока
-        this.player.update(deltaTime);
-
-        // Обновление врагов
-        this.enemyManager.update(deltaTime);
-
-        // Обновление усилений
-        this.powerUpManager.update(deltaTime);
-
-        // Обновление портала
-        if (this.portal) {
-            this.portal.update(deltaTime);
+        // Применяем буферизованный ход, как только лисёнок остановился.
+        // Это даёт ощущение «непрерывного» движения при удержании пальца на свайпе.
+        if (!this.player.isMoving && this.bufferedDir) {
+            const dir = this.bufferedDir;
+            this.bufferedDir = null;
+            this._tryMove(dir);
         }
 
-        // Обновление движущихся стен
-        this._updateMovingWalls(deltaTime);
+        this.player.update(deltaTime);
+        this.enemyManager.update(deltaTime);
+        this.powerUpManager.update(deltaTime);
 
-        // Обновление частиц
+        if (this.portal) this.portal.update(deltaTime);
+
+        this._updateMovingWalls(deltaTime);
         this.particles.update(deltaTime);
 
-        // Обновление эффекта усиления
         if (this.activePowerEffect) {
             this.activePowerEffect.update(
                 deltaTime,
@@ -490,20 +438,15 @@ class Game {
                 this.renderer.offsetY + this.player.pixelY,
                 this.cellSize
             );
-            if (this.activePowerEffect.isExpired()) {
-                this.activePowerEffect = null;
-            }
+            if (this.activePowerEffect.isExpired()) this.activePowerEffect = null;
         }
 
-        // Обновление дыхания стен
         this.renderer.updateWallBreath(deltaTime);
 
-        // === ОБНОВЛЕНИЕ ЭФФЕКТОВ СКИНОВ ===
+        // Эффекты скинов
         const activeSkin = this.skinShop.getActiveSkin();
         if (activeSkin) {
             this.skinEffects.update(deltaTime, this.player, activeSkin);
-            
-            // Звуки скинов при движении
             if (this.player.isMoving) {
                 this.skinSoundTimer += deltaTime;
                 if (this.skinSoundTimer > 300) {
@@ -513,204 +456,116 @@ class Game {
             }
         }
 
-        // === ОБНОВЛЕНИЕ МОЛНИИ ===
+        // Молния
         if (this.lightning.isActive()) {
             const prevState = this.lightning.getState();
             this.lightning.update(deltaTime, this.player.gridX, this.player.gridY);
             const newState = this.lightning.getState();
-            
-            // Звук зарядки (начало)
+
             if (prevState === 'idle' && newState === 'charging') {
                 this.lightningChargeSound = this.audio.playLightningCharge();
             }
-            
-            // Звук удара + проверка попаданий
+
             if (prevState === 'charging' && newState === 'striking') {
-                // Останавливаем звук зарядки
                 if (this.lightningChargeSound) {
                     this.lightningChargeSound.stop();
                     this.lightningChargeSound = null;
                 }
-                
-                // Проверяем: линейная молния? (30% шанс с 7 уровня)
+
                 const isLine = this.lineLightning.shouldBeLineStrike();
-                
+
                 if (isLine && this.lightning.targetX >= 0) {
-                    // Линейная молния!
                     this.audio.playLineLightningStrike();
-                    const targets = this.lineLightning.calculateLineTargets(
+                    this.lineLightning.calculateLineTargets(
                         this.lightning.targetX, this.lightning.targetY,
                         this.lightning.lastDirection, this.levelData.matrix
                     );
                     this.lineLightning.generateLineBolt(this.cellSize, this.renderer.offsetX, this.renderer.offsetY);
                     this.lineLightning.generateLineSparks(this.cellSize);
-                    
-                    // Проверка попадания по игроку (любая из клеток линии)
+
                     if (this.lineLightning.checkHit(this.player.gridX, this.player.gridY)) {
                         const damaged = this.player.takeDamage(1);
-                        if (damaged) {
-                            this.audio.playDamage();
-                            this.player.triggerEmotion('scared', 1200);
-                            this.audio.playEmotionScared();
-                            this.particles.emitDamage(
-                                this.renderer.offsetX + this.player.pixelX + this.cellSize / 2,
-                                this.renderer.offsetY + this.player.pixelY + this.cellSize / 2
-                            );
-                            if (this.player.lives <= 0) {
-                                this.player.triggerEmotion('sad', 2000);
-                                this.audio.playEmotionSad();
-                                this._gameOver();
-                            }
-                        }
+                        if (damaged) this._handlePlayerHit();
                     }
                 } else {
-                    // Обычный удар молнии
                     this.audio.playLightningStrike();
-                
-                // Проверяем попадания
-                const strikeResult = this.lightning.checkStrike(
-                    this.player.gridX,
-                    this.player.gridY,
-                    this.enemyManager.enemies,
-                    this.crystals
-                );
-                
-                if (strikeResult) {
-                    // Попадание по лисёнку
-                    if (strikeResult.hitPlayer) {
-                        const damaged = this.player.takeDamage(1);
-                        if (damaged) {
-                            this.audio.playDamage();
-                            this.player.triggerEmotion('scared', 1200);
-                            this.audio.playEmotionScared();
-                            this.particles.emitDamage(
-                                this.renderer.offsetX + this.player.pixelX + this.cellSize / 2,
-                                this.renderer.offsetY + this.player.pixelY + this.cellSize / 2
-                            );
-                            if (this.player.lives <= 0) {
-                                this.player.triggerEmotion('sad', 2000);
-                                this.audio.playEmotionSad();
-                                this._gameOver();
-                            }
+                    const strikeResult = this.lightning.checkStrike(
+                        this.player.gridX, this.player.gridY,
+                        this.enemyManager.enemies, this.crystals
+                    );
+                    if (strikeResult) {
+                        if (strikeResult.hitPlayer) {
+                            const damaged = this.player.takeDamage(1);
+                            if (damaged) this._handlePlayerHit();
                         }
-                    }
-                    // Попадание по врагу — уничтожаем
-                    if (strikeResult.hitEnemy) {
-                        strikeResult.hitEnemy.alive = false;
-                    }
-                    // Попадание по кристаллу — уничтожаем (не засчитываем)
-                    if (strikeResult.hitCrystal) {
-                        strikeResult.hitCrystal.collected = true;
+                        if (strikeResult.hitEnemy) strikeResult.hitEnemy.alive = false;
+                        if (strikeResult.hitCrystal) strikeResult.hitCrystal.collected = true;
                     }
                 }
-                } // Закрытие else (обычная молния)
             }
         }
 
-        // Улучшение 3: звук зевоты при бездействии
+        // Зевота при бездействии
         if (this.player.emotionState === 'idle' && this.player.emotionTimer > 1900) {
             this.audio.playEmotionIdle();
         }
 
-        // === ОБНОВЛЕНИЕ НОВЫХ МЕХАНИК ===
-        // Кристалл-непоседа
+        // Новые механики
         this.crystalRunners.update(deltaTime, this.player.gridX, this.player.gridY, this.levelData.matrix);
-
-        // Призрачные стены
         this.ghostWalls.update(deltaTime, time, this.levelData.matrix, this.player);
-
-        // Линейная молния
         this.lineLightning.update(deltaTime);
-
-        // Волшебный цветок-таймер
         this.magicFlowers.update(deltaTime);
-        // Проверка увядших цветков (порождают тень)
+
         const shadowSpawn = this.magicFlowers.checkShadowSpawn();
         if (shadowSpawn) {
-            // Добавляем нового врага-тень на месте увядшего цветка
             const newEnemy = new Enemy({
                 startPos: shadowSpawn,
                 patrolRoute: [shadowSpawn],
                 isGuardian: false
             }, this.level, this.cellSize);
             this.enemyManager.enemies.push(newEnemy);
-            this.audio.playFlowerWilt();
+            this.audio.playFlowerWilt && this.audio.playFlowerWilt();
         }
 
-        // Туманный уровень
         this.fogLevel.update(deltaTime, this.player.gridX, this.player.gridY);
 
-        // Кристальная лихорадка
         const prevFeverActive = this.crystalFever.active;
         this.crystalFever.update(deltaTime, this.player.gridX, this.player.gridY);
-        // Звук начала/конца лихорадки
         if (!prevFeverActive && this.crystalFever.active) {
-            this.audio.playCrystalFeverStart();
+            this.audio.playCrystalFeverStart && this.audio.playCrystalFeverStart();
         }
         if (prevFeverActive && !this.crystalFever.active) {
-            this.audio.playCrystalFeverEnd();
-            // Проверка МЕГА-СБОР
+            this.audio.playCrystalFeverEnd && this.audio.playCrystalFeverEnd();
             if (this.crystalFever.checkMegaCollect()) {
                 this.particles.addTextPopup(
                     this.canvas.width / 2, this.canvas.height / 2 - 30,
-                    'МЕГА-СБОР!', '#ffd700', 28
+                    'МЕГА-СБОР!', '#ffb74d', 28
                 );
                 this.particles.emitLevelComplete(this.canvas.width, this.canvas.height);
             }
         }
 
-        // Проверка столкновений (только когда не двигается)
+        // Столкновения проверяем только когда лисёнок «приземлился» на клетку
         if (!this.player.isMoving) {
             this._checkCollisions();
         }
 
-        // Эффект магнита
-        if (this.player.activePower === 'magnet') {
-            this._applyMagnetEffect();
-        }
+        if (this.player.activePower === 'magnet') this._applyMagnetEffect();
     }
 
-    // === ОБРАБОТКА ВВОДА ===
-    _processInput() {
-        if (this.player.isMoving || this.inputQueue.length === 0) return;
-
-        const direction = this.inputQueue.shift();
-        // Улучшение 3: сброс таймера бездействия при вводе
-        this.player.resetIdleTimer();
-        let dx = 0, dy = 0;
-
-        switch (direction) {
-            case 'up': dy = -1; break;
-            case 'down': dy = 1; break;
-            case 'left': dx = -1; break;
-            case 'right': dx = 1; break;
-        }
-
-        const newX = this.player.gridX + dx;
-        const newY = this.player.gridY + dy;
-
-        // Проверка границ и стен
-        const matrix = this.state === GAME_CONSTANTS.STATES.BONUS_ROOM ? 
-            this.bonusRoom.matrix : this.levelData.matrix;
-
-        if (newX >= 0 && newX < matrix[0].length &&
-            newY >= 0 && newY < matrix.length &&
-            matrix[newY][newX] !== GAME_CONSTANTS.CELL_TYPES.WALL) {
-            
-            // Проверка движущейся стены
-            const blockedByWall = this.movingWalls.some(w => 
-                w.isBlocking && w.pos.x === newX && w.pos.y === newY
-            );
-
-            // Проверка призрачной стены
-            const blockedByGhost = this.ghostWalls.isBlocked(newX, newY);
-
-            if (!blockedByWall && !blockedByGhost) {
-                this.player.moveTo(newX, newY);
-                this.audio.playMove();
-                // Обновляем направление для системы молний
-                this.lightning.updatePlayerDirection(direction);
-            }
+    // === ОБРАБОТКА ПОПАДАНИЯ ПО ИГРОКУ (вынесено для DRY) ===
+    _handlePlayerHit() {
+        this.audio.playDamage();
+        this.player.triggerEmotion('scared', 1200);
+        this.audio.playEmotionScared();
+        this.particles.emitDamage(
+            this.renderer.offsetX + this.player.pixelX + this.cellSize / 2,
+            this.renderer.offsetY + this.player.pixelY + this.cellSize / 2
+        );
+        if (this.player.lives <= 0) {
+            this.player.triggerEmotion('sad', 2000);
+            this.audio.playEmotionSad();
+            this._gameOver();
         }
     }
 
@@ -719,18 +574,15 @@ class Game {
         const px = this.player.gridX;
         const py = this.player.gridY;
 
-        // Сбор кристаллов
+        // Кристаллы
         for (const crystal of this.crystals) {
             if (!crystal.collected && crystal.x === px && crystal.y === py) {
                 crystal.collected = true;
                 this.player.addScore(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
-                // Улучшение 1: добавляем кристаллы в баланс магазина
                 this.skinShop.addCrystals(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
                 this.audio.playCrystalCollect();
-                // Улучшение 3: эмоция радости
                 this.player.triggerEmotion('happy', 1000);
                 this.audio.playEmotionHappy();
-                // Усиление эффекта скина при сборе кристалла (тир 4)
                 this.skinEffects.onCrystalCollected();
                 this.particles.emitCrystalCollect(
                     this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
@@ -745,12 +597,11 @@ class Game {
             }
         }
 
-        // Сбор усилений
+        // Усиления
         const collectedPower = this.powerUpManager.checkCollection(px, py);
         if (collectedPower) {
             this.player.activatePower(collectedPower.type);
             this.audio.playPowerUp();
-            // Улучшение 3: эмоция удивления
             this.player.triggerEmotion('surprised', 800);
             this.audio.playEmotionSurprised();
             this.particles.emitPowerCollect(
@@ -764,14 +615,9 @@ class Game {
                 collectedPower.getName(),
                 collectedPower.getColor(), 18
             );
-
-            // Создаём визуальный эффект
             this.activePowerEffect = new ActivePowerEffect(
-                collectedPower.type, 
-                this.player.powerTimer
+                collectedPower.type, this.player.powerTimer
             );
-
-            // Если заморозка — замораживаем врагов
             if (collectedPower.type === 'freeze') {
                 this.enemyManager.freezeAll(GAME_CONSTANTS.POWERS.FREEZE_DURATION);
             }
@@ -800,86 +646,67 @@ class Game {
             this.portalTransitionTimer = 1000;
         }
 
-        // Столкновение с врагами
+        // Враги
         const hitEnemy = this.enemyManager.checkCollisions(
             this.player.pixelX, this.player.pixelY, this.cellSize
         );
         if (hitEnemy) {
             const damaged = this.player.takeDamage(hitEnemy.damage);
-            if (damaged) {
-                this.audio.playDamage();
-                // Улучшение 3: эмоция испуга
-                this.player.triggerEmotion('scared', 1200);
-                this.audio.playEmotionScared();
-                this.particles.emitDamage(
-                    this.renderer.offsetX + this.player.pixelX + this.cellSize / 2,
-                    this.renderer.offsetY + this.player.pixelY + this.cellSize / 2
-                );
-
-                if (this.player.lives <= 0) {
-                    // Улучшение 3: эмоция грусти при проигрыше
-                    this.player.triggerEmotion('sad', 2000);
-                    this.audio.playEmotionSad();
-                    this._gameOver();
-                }
-            }
+            if (damaged) this._handlePlayerHit();
         }
 
-        // Финишная звезда
+        // Финиш
         if (this.levelData.finishPos &&
             px === this.levelData.finishPos.x && py === this.levelData.finishPos.y) {
             this._levelComplete();
         }
 
-        // === СТОЛКНОВЕНИЯ НОВЫХ МЕХАНИК ===
         // Кристалл-непоседа
         const caughtRunner = this.crystalRunners.checkCollection(px, py);
         if (caughtRunner) {
             this.player.addScore(caughtRunner.points);
             this.skinShop.addCrystals(caughtRunner.points);
-            this.audio.playCrystalRunnerCatch();
+            this.audio.playCrystalRunnerCatch && this.audio.playCrystalRunnerCatch();
             this.player.triggerEmotion('celebrating', 1500);
-            // Фейерверк из золотых и розовых частиц
-            for (let i = 0; i < 20; i++) {
-                const angle = (Math.PI * 2 / 20) * i;
-                const speed = 2 + Math.random() * 4;
-                const color = Math.random() < 0.5 ? '#ffd700' : '#ff69b4';
-                this.particles.particles.push({
+            // Лёгкий фейерверк (укладывается в общий лимит частиц)
+            for (let i = 0; i < 12; i++) {
+                const angle = (Math.PI * 2 / 12) * i;
+                const speed = 2 + Math.random() * 3;
+                const color = i % 2 === 0 ? '#ffd54f' : '#f48fb1';
+                this.particles._addParticle({
                     x: this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
                     y: this.renderer.offsetY + py * this.cellSize + this.cellSize / 2,
-                    vx: Math.cos(angle) * speed,
-                    vy: Math.sin(angle) * speed,
-                    life: 800, maxLife: 800,
-                    size: 3 + Math.random() * 4,
-                    color: color, alpha: 1,
-                    gravity: 0.08, shrink: 0.97, type: 'star',
+                    vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+                    life: 700, maxLife: 700,
+                    size: 3 + Math.random() * 3,
+                    color, alpha: 1, gravity: 0.08, shrink: 0.97, type: 'star',
                     rotation: 0, rotationSpeed: (Math.random() - 0.5) * 0.2
                 });
             }
             this.particles.addTextPopup(
                 this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
                 this.renderer.offsetY + py * this.cellSize,
-                `+${caughtRunner.points}`, '#ffd700', 20
+                `+${caughtRunner.points}`, '#ffb74d', 20
             );
         }
 
         // Волшебный цветок
         const flowerReward = this.magicFlowers.checkCollection(px, py);
         if (flowerReward) {
-            this.audio.playFlowerCollect();
+            this.audio.playFlowerCollect && this.audio.playFlowerCollect();
             this.player.triggerEmotion('happy', 1200);
-            
             switch (flowerReward.type) {
-                case 'crystals':
+                case 'crystals': {
                     const amount = flowerReward.amount * GAME_CONSTANTS.SCORING.CRYSTAL_POINTS;
                     this.player.addScore(amount);
                     this.skinShop.addCrystals(amount);
                     this.particles.addTextPopup(
                         this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
                         this.renderer.offsetY + py * this.cellSize,
-                        `+${amount}`, '#ffd700', 18
+                        `+${amount}`, '#ffb74d', 18
                     );
                     break;
+                }
                 case 'power':
                     this.player.activatePower(flowerReward.power);
                     this.activePowerEffect = new ActivePowerEffect(flowerReward.power, this.player.powerTimer);
@@ -892,13 +719,13 @@ class Game {
                     this.particles.addTextPopup(
                         this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
                         this.renderer.offsetY + py * this.cellSize,
-                        '+1 ❤', '#f44336', 20
+                        '+1 ❤', '#ef9a9a', 20
                     );
                     break;
             }
         }
 
-        // Кристальная лихорадка — сбор кристаллов
+        // Кристальная лихорадка
         if (this.crystalFever.active && this.crystalFever.collectCrystal(px, py)) {
             this.player.addScore(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
             this.skinShop.addCrystals(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
@@ -920,7 +747,6 @@ class Game {
             if (crystal.collected) continue;
             const dist = Math.abs(crystal.x - px) + Math.abs(crystal.y - py);
             if (dist <= radius * 2) {
-                // Притягиваем кристалл
                 crystal.collected = true;
                 this.player.addScore(GAME_CONSTANTS.SCORING.CRYSTAL_POINTS);
                 this.audio.playCrystalCollect();
@@ -942,14 +768,11 @@ class Game {
         }
     }
 
-
-
     // === ЗАВЕРШЕНИЕ УРОВНЯ ===
     _levelComplete() {
         this.player.startVictory();
         this.player.addScore(GAME_CONSTANTS.SCORING.LEVEL_BONUS * this.level);
         this.audio.playLevelComplete();
-        // Улучшение 3: эмоция бурной радости
         this.player.triggerEmotion('celebrating', 2500);
         this.audio.playEmotionCelebrating();
         this.particles.emitLevelComplete(this.canvas.width, this.canvas.height);
@@ -957,16 +780,12 @@ class Game {
         this.levelCompleteTimer = 2500;
         this.storage.updateHighScore(this.player.score);
 
-        // Рассеивание тумана при завершении уровня
-        if (this.fogLevel.active) {
-            this.fogLevel.startFadeOut();
-        }
+        if (this.fogLevel.active) this.fogLevel.startFadeOut();
 
-        // Мини-поздравление каждые 10 уровней
         if (this.level % 10 === 0) {
             this.particles.addTextPopup(
                 this.canvas.width / 2, this.canvas.height / 2 - 50,
-                'НЕВЕРОЯТНО!', '#ffd700', 32
+                'НЕВЕРОЯТНО!', '#ffb74d', 32
             );
         }
     }
@@ -975,7 +794,6 @@ class Game {
         this.player.update(deltaTime);
         this.particles.update(deltaTime);
         this.levelCompleteTimer -= deltaTime;
-
         if (this.levelCompleteTimer <= 0) {
             this.level++;
             this._startLevel();
@@ -986,24 +804,17 @@ class Game {
     _updatePortalTransition(deltaTime) {
         this.particles.update(deltaTime);
         this.portalTransitionTimer -= deltaTime;
-
         if (this.portalTransitionTimer <= 0) {
-            // Входим в бонус-комнату
             const returnPos = { x: this.player.gridX, y: this.player.gridY };
             const roomData = this.bonusRoom.activate(returnPos);
-
-            // Перенастраиваем размер
             const roomMatSize = roomData.size;
             const roomCellSize = Math.floor(Math.min(
                 (this.canvas.width - 20) / roomMatSize,
-                (this.canvas.height - 80) / roomMatSize,
-                60
+                (this.canvas.height - 80) / roomMatSize, 60
             ));
-
             this.renderer.setOffset(roomMatSize, roomMatSize, roomCellSize);
             this.player.resetForNewLevel(roomData.startPos, roomCellSize);
             this.cellSize = roomCellSize;
-
             this.state = GAME_CONSTANTS.STATES.BONUS_ROOM;
             this.audio.playBonusRoomMelody();
         }
@@ -1011,7 +822,12 @@ class Game {
 
     // === БОНУС-КОМНАТА ===
     _updateBonusRoom(deltaTime) {
-        this._processInput();
+        // Применяем буферизованное направление
+        if (!this.player.isMoving && this.bufferedDir) {
+            const dir = this.bufferedDir;
+            this.bufferedDir = null;
+            this._tryMove(dir);
+        }
         this.player.update(deltaTime);
         this.bonusRoom.update(deltaTime);
         this.particles.update(deltaTime);
@@ -1020,10 +836,8 @@ class Game {
             const px = this.player.gridX;
             const py = this.player.gridY;
 
-            // Сбор кристаллов
             if (this.bonusRoom.collectCrystal(px, py)) {
                 this.player.addScore(GAME_CONSTANTS.SCORING.BONUS_ROOM_CRYSTAL);
-                // Улучшение 1: добавляем кристаллы в баланс магазина
                 this.skinShop.addCrystals(GAME_CONSTANTS.SCORING.BONUS_ROOM_CRYSTAL);
                 this.audio.playCrystalCollect();
                 this.particles.emitCrystalCollect(
@@ -1032,7 +846,6 @@ class Game {
                 );
             }
 
-            // Сбор усиления
             const powerType = this.bonusRoom.collectPower(px, py);
             if (powerType) {
                 this.player.activatePower(powerType);
@@ -1040,24 +853,17 @@ class Game {
             }
         }
 
-        // Выход из бонус-комнаты
-        if (this.bonusRoom.isExitReady()) {
-            this._exitBonusRoom();
-        }
+        if (this.bonusRoom.isExitReady()) this._exitBonusRoom();
     }
 
     _exitBonusRoom() {
         this.bonusRoom.deactivate();
-
-        // Возвращаемся в основной лабиринт
         const returnPos = this.bonusRoom.returnPos;
         const maxCellW = (this.canvas.width - 20) / this.mazeWidth;
         const maxCellH = (this.canvas.height - 80) / this.mazeHeight;
         this.cellSize = Math.floor(Math.min(maxCellW, maxCellH, 60));
-
         this.renderer.setOffset(this.mazeWidth, this.mazeHeight, this.cellSize);
         this.player.resetForNewLevel(returnPos, this.cellSize);
-
         this.state = GAME_CONSTANTS.STATES.PLAYING;
     }
 
@@ -1065,18 +871,13 @@ class Game {
         this.renderer.clear();
         this.renderer.drawBonusRoom(this.bonusRoom, this.player, performance.now());
         this.renderer.drawMaze(this.bonusRoom.matrix);
-
-        // Кристаллы бонус-комнаты
         const uncollected = this.bonusRoom.crystals.filter(c => !c.collected);
         this.renderer.drawCrystals(uncollected, performance.now());
-
-        // Усиление в бонус-комнате
         if (this.bonusRoom.power && !this.bonusRoom.power.collected) {
             const tempPower = new PowerUp(this.bonusRoom.power, this.cellSize);
             tempPower.update(0);
             this.renderer.drawPowerUps([tempPower]);
         }
-
         this.renderer.drawPlayer(this.player);
         this.renderer.drawParticles(this.particles);
     }
@@ -1090,18 +891,14 @@ class Game {
     _renderGameOver() {
         const activeSkin = this.skinShop.getActiveSkin();
         this.menu.renderGameOver(
-            this.player.score,
-            this.level,
-            this.storage.getHighScore(),
-            activeSkin
+            this.player.score, this.level,
+            this.storage.getHighScore(), activeSkin
         );
     }
 
     // === РЕНДЕР ИГРОВОГО ПРОЦЕССА ===
     _renderPlaying() {
         const time = performance.now();
-
-        // Дрожание экрана от молнии (смещение контекста)
         const shake = this.lightning.getShakeOffset();
         if (shake.x !== 0 || shake.y !== 0) {
             this.ctx.save();
@@ -1111,102 +908,64 @@ class Game {
         this.renderer.clear();
         this.renderer.drawMaze(this.levelData.matrix);
 
-        // Кристаллы
         const uncollected = this.crystals.filter(c => !c.collected);
         this.renderer.drawCrystals(uncollected, time);
 
-        // Паутина
         if (this.levelData.webs && this.levelData.webs.length > 0) {
             this.renderer.drawWebs(this.levelData.webs);
         }
-
-        // Движущиеся стены
         if (this.movingWalls.length > 0) {
             this.renderer.drawMovingWalls(this.movingWalls);
         }
-
-        // Портал
-        if (this.portal) {
-            this.renderer.drawPortal(this.portal);
-        }
-
-        // Финишная звезда
+        if (this.portal) this.renderer.drawPortal(this.portal);
         this.renderer.drawFinishStar(this.levelData.finishPos, time);
-
-        // Усиления
         this.renderer.drawPowerUps(this.powerUpManager.getActive());
 
-        // === ОТРИСОВКА НОВЫХ МЕХАНИК ===
-        // Призрачные стены
         this.ghostWalls.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
-
-        // Кристаллы-непоседы
         this.crystalRunners.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
-
-        // Волшебные цветки
         this.magicFlowers.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time);
-
-        // Кристальная лихорадка
         this.crystalFever.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, time, this.canvas.width, this.canvas.height);
 
-        // Враги
         this.renderer.drawEnemies(this.enemyManager.enemies);
 
-        // Эффект активного усиления
-        if (this.activePowerEffect) {
-            this.renderer.drawActivePowerEffect(this.activePowerEffect);
-        }
+        if (this.activePowerEffect) this.renderer.drawActivePowerEffect(this.activePowerEffect);
 
-        // Эффекты скина (ЗА лисёнком — аура, шлейф, кольца)
         const activeSkin = this.skinShop.getActiveSkin();
         if (activeSkin) {
             this.renderer.drawSkinEffects(this.player, activeSkin, time, this.skinEffects);
         }
-
-        // Игрок (с поддержкой кувырка и полёта от скинов)
         this.renderer.drawPlayer(this.player, activeSkin, this.skinEffects);
-
-        // Частицы (поверх всего игрового)
         this.renderer.drawParticles(this.particles);
 
-        // UI
         this.renderer.drawUI(
-            this.player.lives,
-            this.player.score,
-            this.level,
-            this.player.activePower,
-            this.player.powerTimer,
-            this._getMaxPowerDuration(this.player.activePower),
-            time
+            this.player.lives, this.player.score, this.level,
+            this.player.activePower, this.player.powerTimer,
+            this._getMaxPowerDuration(this.player.activePower), time
         );
 
-        // Туман (поверх игрового мира, но под UI)
         this.fogLevel.render(this.ctx, this.renderer.offsetX, this.renderer.offsetY, this.levelData.matrix);
 
-        // Кнопка паузы
+        // Кнопка паузы (минималистичная — скруглённый квадратик с двумя полосками)
         this.renderer.drawPauseButton(this.canvas.width - 22, 27, 14);
 
-        // Восстанавливаем контекст после дрожания
-        if (shake.x !== 0 || shake.y !== 0) {
-            this.ctx.restore();
-        }
+        if (shake.x !== 0 || shake.y !== 0) this.ctx.restore();
 
-        // МОЛНИЯ — рисуется ПОВЕРХ ВСЕГО (включая UI), вне дрожания
         this.renderer.drawLightning(this.lightning);
-        
-        // Линейная молния (поверх обычной)
+
         if (this.lineLightning.isLineStrike) {
-            // Индикация зарядки линейных целей
             if (this.lightning.isCharging() && this.lineLightning.lineTargets.length > 0) {
                 const progress = this.lightning.chargeTimer / this.lightning.chargeMaxTime;
-                this.lineLightning.renderCharging(this.ctx, this.renderer.offsetX, this.renderer.offsetY, this.cellSize, progress, this.lightning.pulsePhase);
+                this.lineLightning.renderCharging(
+                    this.ctx, this.renderer.offsetX, this.renderer.offsetY,
+                    this.cellSize, progress, this.lightning.pulsePhase
+                );
             }
             this.lineLightning.renderBolt(this.ctx, this.renderer.offsetX, this.renderer.offsetY);
             this.lineLightning.renderSparks(this.ctx, this.renderer.offsetX, this.renderer.offsetY);
         }
     }
 
-    // === Улучшение 1: ОБНОВЛЕНИЕ И РЕНДЕР МАГАЗИНА ===
+    // === МАГАЗИН ===
     _updateShop(deltaTime) {
         this.menu.updateBackground(deltaTime);
         if (this.skinShop.purchaseAnimation) {
@@ -1223,16 +982,12 @@ class Game {
     _playSkinMovementSound(skin) {
         if (!skin) return;
         switch (skin.tier) {
-            case 2:
-                this.audio.playSkinMagicRustle();
-                break;
+            case 2: this.audio.playSkinMagicRustle(); break;
             case 3:
                 if (skin.effect === 'fire') this.audio.playSkinFireCrackle();
                 else this.audio.playSkinIceChime();
                 break;
-            case 4:
-                this.audio.playSkinAmbient();
-                break;
+            case 4: this.audio.playSkinAmbient(); break;
             case 5:
                 if (skin.effect === 'shadow_king') this.audio.playSkinShadowPulse();
                 else this.audio.playSkinStarChime();
@@ -1253,5 +1008,5 @@ class Game {
 
 // === ЗАПУСК ИГРЫ ===
 window.addEventListener('DOMContentLoaded', () => {
-    const game = new Game();
+    new Game();
 });
