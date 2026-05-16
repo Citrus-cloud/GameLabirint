@@ -754,4 +754,276 @@ class AudioManager {
         osc.start(now);
         osc.stop(now + 0.7);
     }
+
+    // ======================================================================
+    // НОВЫЕ ЗВУКИ МЕХАНИК (Кристалл-непоседа, Призрачные стены, Цветок, Лихорадка, Туман)
+    // ======================================================================
+
+    // === ЗВУК ПОИМКИ КРИСТАЛЛА-НЕПОСЕДЫ (игривая восходящая мелодия + смешок) ===
+    playCrystalRunnerCatch() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        // Три восходящих ноты (игривые)
+        const notes = [659, 880, 1175]; // E5, A5, D6
+        notes.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + i * 0.1);
+            gain.gain.setValueAtTime(0.25, now + i * 0.1);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.1 + 0.2);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now + i * 0.1);
+            osc.stop(now + i * 0.1 + 0.25);
+        });
+        
+        // Короткий "смешок" (быстрые ноты)
+        const giggleTime = now + 0.35;
+        const giggles = [1320, 1100, 1320, 1100];
+        giggles.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, giggleTime + i * 0.06);
+            gain.gain.setValueAtTime(0.1, giggleTime + i * 0.06);
+            gain.gain.exponentialRampToValueAtTime(0.01, giggleTime + i * 0.06 + 0.08);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(giggleTime + i * 0.06);
+            osc.stop(giggleTime + i * 0.06 + 0.1);
+        });
+    }
+
+    // === ЗВУК СМЕНЫ СОСТОЯНИЯ ПРИЗРАЧНОЙ СТЕНЫ (тихий перезвон) ===
+    playGhostWallToggle() {
+        if (!this.enabled || !this._canPlaySound()) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1500 + Math.random() * 500, now);
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.25);
+    }
+
+    // === ЗВУК ЛИНЕЙНОЙ МОЛНИИ (более мощный удар с эхом) ===
+    playLineLightningStrike() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Усиленный треск (длиннее и громче)
+        const bufferSize = this.ctx.sampleRate * 0.6;
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            const decay = Math.exp(-i / (bufferSize * 0.15));
+            const crackle = Math.random() < 0.03 ? 2.5 : 1;
+            data[i] = (Math.random() * 2 - 1) * decay * crackle;
+        }
+        const noise = this.ctx.createBufferSource();
+        const noiseGain = this.ctx.createGain();
+        noise.buffer = buffer;
+        noiseGain.gain.setValueAtTime(0.6, now);
+        noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        noise.connect(noiseGain);
+        noiseGain.connect(this.ctx.destination);
+        noise.start(now);
+        
+        // Мощный бас
+        const bass = this.ctx.createOscillator();
+        const bassGain = this.ctx.createGain();
+        bass.type = 'sine';
+        bass.frequency.setValueAtTime(400, now);
+        bass.frequency.exponentialRampToValueAtTime(25, now + 0.5);
+        bassGain.gain.setValueAtTime(0.6, now);
+        bassGain.gain.exponentialRampToValueAtTime(0.01, now + 0.7);
+        bass.connect(bassGain);
+        bassGain.connect(this.ctx.destination);
+        bass.start(now);
+        bass.stop(now + 0.8);
+        
+        // Эхо
+        const echo = this.ctx.createOscillator();
+        const echoGain = this.ctx.createGain();
+        echo.type = 'sine';
+        echo.frequency.setValueAtTime(80, now + 0.3);
+        echo.frequency.exponentialRampToValueAtTime(30, now + 0.8);
+        echoGain.gain.setValueAtTime(0.15, now + 0.3);
+        echoGain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+        echo.connect(echoGain);
+        echoGain.connect(this.ctx.destination);
+        echo.start(now + 0.3);
+        echo.stop(now + 1.1);
+    }
+
+    // === ЗВУК ТИКАНЬЯ ЧАСОВ ЦВЕТКА (щелчок каждую секунду) ===
+    playFlowerTick() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(2000, now);
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.06);
+    }
+
+    // === ЗВУК СБОРА ЦВЕТКА (победная мелодия) ===
+    playFlowerCollect() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        const notes = [523, 659, 784, 1047, 1319]; // C5-E5-G5-C6-E6
+        notes.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + i * 0.08);
+            gain.gain.setValueAtTime(0.2, now + i * 0.08);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.08 + 0.25);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now + i * 0.08);
+            osc.stop(now + i * 0.08 + 0.3);
+        });
+    }
+
+    // === ЗВУК УВЯДАНИЯ ЦВЕТКА (грустный нисходящий) ===
+    playFlowerWilt() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.5);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.7);
+    }
+
+    // === ЗВУК НАЧАЛА КРИСТАЛЬНОЙ ЛИХОРАДКИ (фанфары + энергия) ===
+    playCrystalFeverStart() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        // Фанфара
+        const notes = [784, 988, 1175, 1568]; // G5, B5, D6, G6
+        notes.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + i * 0.1);
+            gain.gain.setValueAtTime(0.3, now + i * 0.1);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.1 + 0.3);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now + i * 0.1);
+            osc.stop(now + i * 0.1 + 0.35);
+        });
+        
+        // Финальный аккорд с блеском
+        const chordTime = now + 0.5;
+        [784, 988, 1175, 1568].forEach(freq => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, chordTime);
+            gain.gain.setValueAtTime(0.15, chordTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, chordTime + 0.8);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(chordTime);
+            osc.stop(chordTime + 0.9);
+        });
+    }
+
+    // === ЗВУК ОКОНЧАНИЯ ЛИХОРАДКИ (затухающий перезвон) ===
+    playCrystalFeverEnd() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        const notes = [1568, 1175, 988, 784]; // Нисходящее
+        notes.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + i * 0.15);
+            gain.gain.setValueAtTime(0.15 - i * 0.03, now + i * 0.15);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.15 + 0.3);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now + i * 0.15);
+            osc.stop(now + i * 0.15 + 0.35);
+        });
+    }
+
+    // === ЗВУК ТУМАННОГО УРОВНЯ (приглушённый эмбиент при начале) ===
+    playFogAmbient() {
+        if (!this.enabled) return;
+        this._ensureContext();
+        
+        const now = this.ctx.currentTime;
+        
+        // Низкий гул тумана
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 300;
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(80, now);
+        osc.frequency.linearRampToValueAtTime(100, now + 2);
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.1, now + 0.5);
+        gain.gain.linearRampToValueAtTime(0.05, now + 1.5);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 2.5);
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 3);
+        
+        // Отдалённые перезвоны
+        for (let i = 0; i < 4; i++) {
+            const chime = this.ctx.createOscillator();
+            const chimeGain = this.ctx.createGain();
+            chime.type = 'sine';
+            const freq = [1047, 1319, 1568, 2093][i];
+            const delay = 0.5 + i * 0.4;
+            chime.frequency.setValueAtTime(freq, now + delay);
+            chimeGain.gain.setValueAtTime(0.03, now + delay);
+            chimeGain.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.5);
+            chime.connect(chimeGain);
+            chimeGain.connect(this.ctx.destination);
+            chime.start(now + delay);
+            chime.stop(now + delay + 0.6);
+        }
+    }
+
 }
