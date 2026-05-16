@@ -16,6 +16,8 @@ class Game {
         this.enemyManager = new EnemyManager();
         this.powerUpManager = new PowerUpManager();
         this.skinShop = new SkinShop(); // Улучшение 1: Волшебный гардероб
+        this.skinEffects = new SkinEffectsSystem(); // Система эффектов скинов
+        this.lightning = new LightningSystem(); // Система молний
 
         // Состояние
         this.state = GAME_CONSTANTS.STATES.MENU;
@@ -41,6 +43,12 @@ class Game {
 
         // Движущиеся стены
         this.movingWalls = [];
+
+        // Звук зарядки молнии (для остановки)
+        this.lightningChargeSound = null;
+        
+        // Таймер звуков скинов при движении
+        this.skinSoundTimer = 0;
 
         // Управление
         this.inputQueue = [];
@@ -281,6 +289,18 @@ class Game {
         this.particles.clear();
         this.inputQueue = [];
 
+        // Инициализация системы молний
+        this.lightning.init(
+            this.level,
+            this.levelData.matrix,
+            this.cellSize,
+            this.levelData.startPos,
+            this.levelData.finishPos
+        );
+
+        // Сброс эффектов скинов
+        this.skinEffects.reset();
+
         // Показать анимацию начала уровня
         this.state = GAME_CONSTANTS.STATES.LEVEL_INTRO;
         this.levelIntroTimer = 0;
@@ -404,6 +424,81 @@ class Game {
         // Обновление дыхания стен
         this.renderer.updateWallBreath(deltaTime);
 
+        // === ОБНОВЛЕНИЕ ЭФФЕКТОВ СКИНОВ ===
+        const activeSkin = this.skinShop.getActiveSkin();
+        if (activeSkin) {
+            this.skinEffects.update(deltaTime, this.player, activeSkin);
+            
+            // Звуки скинов при движении
+            if (this.player.isMoving) {
+                this.skinSoundTimer += deltaTime;
+                if (this.skinSoundTimer > 300) {
+                    this.skinSoundTimer = 0;
+                    this._playSkinMovementSound(activeSkin);
+                }
+            }
+        }
+
+        // === ОБНОВЛЕНИЕ МОЛНИИ ===
+        if (this.lightning.isActive()) {
+            const prevState = this.lightning.getState();
+            this.lightning.update(deltaTime, this.player.gridX, this.player.gridY);
+            const newState = this.lightning.getState();
+            
+            // Звук зарядки (начало)
+            if (prevState === 'idle' && newState === 'charging') {
+                this.lightningChargeSound = this.audio.playLightningCharge();
+            }
+            
+            // Звук удара + проверка попаданий
+            if (prevState === 'charging' && newState === 'striking') {
+                // Останавливаем звук зарядки
+                if (this.lightningChargeSound) {
+                    this.lightningChargeSound.stop();
+                    this.lightningChargeSound = null;
+                }
+                // Звук удара
+                this.audio.playLightningStrike();
+                
+                // Проверяем попадания
+                const strikeResult = this.lightning.checkStrike(
+                    this.player.gridX,
+                    this.player.gridY,
+                    this.enemyManager.enemies,
+                    this.crystals
+                );
+                
+                if (strikeResult) {
+                    // Попадание по лисёнку
+                    if (strikeResult.hitPlayer) {
+                        const damaged = this.player.takeDamage(1);
+                        if (damaged) {
+                            this.audio.playDamage();
+                            this.player.triggerEmotion('scared', 1200);
+                            this.audio.playEmotionScared();
+                            this.particles.emitDamage(
+                                this.renderer.offsetX + this.player.pixelX + this.cellSize / 2,
+                                this.renderer.offsetY + this.player.pixelY + this.cellSize / 2
+                            );
+                            if (this.player.lives <= 0) {
+                                this.player.triggerEmotion('sad', 2000);
+                                this.audio.playEmotionSad();
+                                this._gameOver();
+                            }
+                        }
+                    }
+                    // Попадание по врагу — уничтожаем
+                    if (strikeResult.hitEnemy) {
+                        strikeResult.hitEnemy.alive = false;
+                    }
+                    // Попадание по кристаллу — уничтожаем (не засчитываем)
+                    if (strikeResult.hitCrystal) {
+                        strikeResult.hitCrystal.collected = true;
+                    }
+                }
+            }
+        }
+
         // Улучшение 3: звук зевоты при бездействии
         if (this.player.emotionState === 'idle' && this.player.emotionTimer > 1900) {
             this.audio.playEmotionIdle();
@@ -455,6 +550,8 @@ class Game {
             if (!blockedByWall) {
                 this.player.moveTo(newX, newY);
                 this.audio.playMove();
+                // Обновляем направление для системы молний
+                this.lightning.updatePlayerDirection(direction);
             }
         }
     }
@@ -475,6 +572,8 @@ class Game {
                 // Улучшение 3: эмоция радости
                 this.player.triggerEmotion('happy', 1000);
                 this.audio.playEmotionHappy();
+                // Усиление эффекта скина при сборе кристалла (тир 4)
+                this.skinEffects.onCrystalCollected();
                 this.particles.emitCrystalCollect(
                     this.renderer.offsetX + px * this.cellSize + this.cellSize / 2,
                     this.renderer.offsetY + py * this.cellSize + this.cellSize / 2
@@ -759,6 +858,13 @@ class Game {
     _renderPlaying() {
         const time = performance.now();
 
+        // Дрожание экрана от молнии (смещение контекста)
+        const shake = this.lightning.getShakeOffset();
+        if (shake.x !== 0 || shake.y !== 0) {
+            this.ctx.save();
+            this.ctx.translate(shake.x, shake.y);
+        }
+
         this.renderer.clear();
         this.renderer.drawMaze(this.levelData.matrix);
 
@@ -795,16 +901,16 @@ class Game {
             this.renderer.drawActivePowerEffect(this.activePowerEffect);
         }
 
-        // Игрок
+        // Эффекты скина (ЗА лисёнком — аура, шлейф, кольца)
         const activeSkin = this.skinShop.getActiveSkin();
-        this.renderer.drawPlayer(this.player, activeSkin);
-
-        // Улучшение 1: эффекты активного скина
         if (activeSkin) {
-            this.renderer.drawSkinEffects(this.player, activeSkin, time);
+            this.renderer.drawSkinEffects(this.player, activeSkin, time, this.skinEffects);
         }
 
-        // Частицы (поверх всего)
+        // Игрок (с поддержкой кувырка и полёта от скинов)
+        this.renderer.drawPlayer(this.player, activeSkin, this.skinEffects);
+
+        // Частицы (поверх всего игрового)
         this.renderer.drawParticles(this.particles);
 
         // UI
@@ -820,6 +926,14 @@ class Game {
 
         // Кнопка паузы
         this.renderer.drawPauseButton(this.canvas.width - 22, 27, 14);
+
+        // Восстанавливаем контекст после дрожания
+        if (shake.x !== 0 || shake.y !== 0) {
+            this.ctx.restore();
+        }
+
+        // МОЛНИЯ — рисуется ПОВЕРХ ВСЕГО (включая UI), вне дрожания
+        this.renderer.drawLightning(this.lightning);
     }
 
     // === Улучшение 1: ОБНОВЛЕНИЕ И РЕНДЕР МАГАЗИНА ===
@@ -837,6 +951,27 @@ class Game {
         // Анимация покупки (поверх всего)
         if (this.skinShop.purchaseAnimation) {
             this.renderer.drawPurchaseAnimation(this.skinShop, time);
+        }
+    }
+
+    // === Звуки скинов при движении ===
+    _playSkinMovementSound(skin) {
+        if (!skin) return;
+        switch (skin.tier) {
+            case 2:
+                this.audio.playSkinMagicRustle();
+                break;
+            case 3:
+                if (skin.effect === 'fire') this.audio.playSkinFireCrackle();
+                else this.audio.playSkinIceChime();
+                break;
+            case 4:
+                this.audio.playSkinAmbient();
+                break;
+            case 5:
+                if (skin.effect === 'shadow_king') this.audio.playSkinShadowPulse();
+                else this.audio.playSkinStarChime();
+                break;
         }
     }
 
