@@ -1,21 +1,56 @@
 // Файл: magic-maze/js/audio.js
-// Звуковые эффекты через Web Audio API
+// Звуковые эффекты через Web Audio API — ОПТИМИЗИРОВАНО
+// Лимит одновременных звуков, переиспользование буферов шума,
+// защита от утечек памяти
 
 class AudioManager {
     constructor() {
         this.ctx = null;
         this.enabled = true;
         this.initialized = false;
+
+        // Оптимизация: ограничение количества одновременных звуков
+        this._activeSounds = 0;
+        this._maxConcurrentSounds = 8; // Максимум 8 одновременных звуков
+
+        // Кешированные буферы шума (создаются один раз)
+        this._noiseBufferShort = null; // 0.2с
+        this._noiseBufferLong = null;  // 0.6с
     }
 
-    // Инициализация AudioContext (вызывается после пользовательского взаимодействия)
+    // Инициализация AudioContext
     init() {
         try {
             this.ctx = new (window.AudioContext || window.webkitAudioContext)();
             this.initialized = true;
+            // Создаём буферы шума один раз
+            this._createNoiseBuffers();
         } catch (e) {
             console.warn('Web Audio API не поддерживается:', e);
             this.enabled = false;
+        }
+    }
+
+    // Создание переиспользуемых буферов шума
+    _createNoiseBuffers() {
+        if (!this.ctx) return;
+
+        // Короткий шум (0.2с)
+        const shortSize = Math.floor(this.ctx.sampleRate * 0.2);
+        this._noiseBufferShort = this.ctx.createBuffer(1, shortSize, this.ctx.sampleRate);
+        const shortData = this._noiseBufferShort.getChannelData(0);
+        for (let i = 0; i < shortSize; i++) {
+            shortData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (shortSize * 0.3));
+        }
+
+        // Длинный шум (0.6с)
+        const longSize = Math.floor(this.ctx.sampleRate * 0.6);
+        this._noiseBufferLong = this.ctx.createBuffer(1, longSize, this.ctx.sampleRate);
+        const longData = this._noiseBufferLong.getChannelData(0);
+        for (let i = 0; i < longSize; i++) {
+            const decay = Math.exp(-i / (longSize * 0.15));
+            const crackle = Math.random() < 0.03 ? 2.5 : 1;
+            longData[i] = (Math.random() * 2 - 1) * decay * crackle;
         }
     }
 
@@ -27,10 +62,24 @@ class AudioManager {
         }
     }
 
+    // Проверка: можно ли воспроизвести ещё один звук
+    _canPlay() {
+        return this._activeSounds < this._maxConcurrentSounds;
+    }
+
+    // Отслеживание активных звуков
+    _trackSound(duration) {
+        this._activeSounds++;
+        setTimeout(() => {
+            this._activeSounds = Math.max(0, this._activeSounds - 1);
+        }, duration);
+    }
+
     // === ЗВУК СБОРА КРИСТАЛЛА (мелодичный дзынь) ===
     playCrystalCollect() {
-        if (!this.enabled) return;
+        if (!this.enabled || !this._canPlay()) return;
         this._ensureContext();
+        this._trackSound(300);
         
         const now = this.ctx.currentTime;
         
@@ -63,8 +112,9 @@ class AudioManager {
 
     // === ЗВУК ПОЛУЧЕНИЯ УРОНА (глухой удар) ===
     playDamage() {
-        if (!this.enabled) return;
+        if (!this.enabled || !this._canPlay()) return;
         this._ensureContext();
+        this._trackSound(300);
         
         const now = this.ctx.currentTime;
         
@@ -81,21 +131,17 @@ class AudioManager {
         osc.start(now);
         osc.stop(now + 0.3);
         
-        // Шум
-        const bufferSize = this.ctx.sampleRate * 0.2;
-        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-            data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.3));
+        // Шум (переиспользуем буфер)
+        if (this._noiseBufferShort) {
+            const noise = this.ctx.createBufferSource();
+            const noiseGain = this.ctx.createGain();
+            noise.buffer = this._noiseBufferShort;
+            noiseGain.gain.setValueAtTime(0.2, now);
+            noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+            noise.connect(noiseGain);
+            noiseGain.connect(this.ctx.destination);
+            noise.start(now);
         }
-        const noise = this.ctx.createBufferSource();
-        const noiseGain = this.ctx.createGain();
-        noise.buffer = buffer;
-        noiseGain.gain.setValueAtTime(0.2, now);
-        noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
-        noise.connect(noiseGain);
-        noiseGain.connect(this.ctx.destination);
-        noise.start(now);
     }
 
     // === ЗВУК ПОБЕДЫ / ЗАВЕРШЕНИЯ УРОВНЯ (фанфары) ===
@@ -230,8 +276,9 @@ class AudioManager {
 
     // === ЗВУК ДВИЖЕНИЯ ===
     playMove() {
-        if (!this.enabled) return;
+        if (!this.enabled || !this._canPlay()) return;
         this._ensureContext();
+        this._trackSound(80);
         
         const now = this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
@@ -318,38 +365,29 @@ class AudioManager {
 
     // === ЗВУК УДАРА МОЛНИИ (громкий треск + бас) ===
     playLightningStrike() {
-        if (!this.enabled) return;
+        if (!this.enabled || !this._canPlay()) return;
         this._ensureContext();
+        this._trackSound(600);
         
         const now = this.ctx.currentTime;
         
-        // Белый шум (треск)
-        const bufferSize = this.ctx.sampleRate * 0.4;
-        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-            // Убывающий шум с импульсами
-            const decay = Math.exp(-i / (bufferSize * 0.1));
-            const crackle = Math.random() < 0.02 ? 2 : 1;
-            data[i] = (Math.random() * 2 - 1) * decay * crackle;
+        // Треск (переиспользуем длинный буфер шума)
+        if (this._noiseBufferLong) {
+            const noise = this.ctx.createBufferSource();
+            const noiseGain = this.ctx.createGain();
+            const highFilter = this.ctx.createBiquadFilter();
+            highFilter.type = 'highpass';
+            highFilter.frequency.value = 2000;
+            noise.buffer = this._noiseBufferLong;
+            noiseGain.gain.setValueAtTime(0.5, now);
+            noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+            noise.connect(highFilter);
+            highFilter.connect(noiseGain);
+            noiseGain.connect(this.ctx.destination);
+            noise.start(now);
         }
-        const noise = this.ctx.createBufferSource();
-        const noiseGain = this.ctx.createGain();
-        noise.buffer = buffer;
-        noiseGain.gain.setValueAtTime(0.5, now);
-        noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
         
-        // Фильтр для треска (высокие частоты)
-        const highFilter = this.ctx.createBiquadFilter();
-        highFilter.type = 'highpass';
-        highFilter.frequency.value = 2000;
-        
-        noise.connect(highFilter);
-        highFilter.connect(noiseGain);
-        noiseGain.connect(this.ctx.destination);
-        noise.start(now);
-        
-        // Бас (осциллятор с быстрым падением частоты)
+        // Бас
         const bass = this.ctx.createOscillator();
         const bassGain = this.ctx.createGain();
         bass.type = 'sine';
@@ -362,7 +400,7 @@ class AudioManager {
         bass.start(now);
         bass.stop(now + 0.6);
         
-        // Средний треск (квадрат с падением)
+        // Средний треск
         const mid = this.ctx.createOscillator();
         const midGain = this.ctx.createGain();
         mid.type = 'square';
@@ -817,28 +855,23 @@ class AudioManager {
 
     // === ЗВУК ЛИНЕЙНОЙ МОЛНИИ (более мощный удар с эхом) ===
     playLineLightningStrike() {
-        if (!this.enabled) return;
+        if (!this.enabled || !this._canPlay()) return;
         this._ensureContext();
+        this._trackSound(1100);
         
         const now = this.ctx.currentTime;
         
-        // Усиленный треск (длиннее и громче)
-        const bufferSize = this.ctx.sampleRate * 0.6;
-        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-            const decay = Math.exp(-i / (bufferSize * 0.15));
-            const crackle = Math.random() < 0.03 ? 2.5 : 1;
-            data[i] = (Math.random() * 2 - 1) * decay * crackle;
+        // Усиленный треск (переиспользуем буфер)
+        if (this._noiseBufferLong) {
+            const noise = this.ctx.createBufferSource();
+            const noiseGain = this.ctx.createGain();
+            noise.buffer = this._noiseBufferLong;
+            noiseGain.gain.setValueAtTime(0.6, now);
+            noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+            noise.connect(noiseGain);
+            noiseGain.connect(this.ctx.destination);
+            noise.start(now);
         }
-        const noise = this.ctx.createBufferSource();
-        const noiseGain = this.ctx.createGain();
-        noise.buffer = buffer;
-        noiseGain.gain.setValueAtTime(0.6, now);
-        noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
-        noise.connect(noiseGain);
-        noiseGain.connect(this.ctx.destination);
-        noise.start(now);
         
         // Мощный бас
         const bass = this.ctx.createOscillator();

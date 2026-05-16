@@ -1,5 +1,6 @@
 // Файл: magic-maze/js/main.js
 // Инициализация, основной игровой цикл, управление состояниями
+// ОПТИМИЗИРОВАНО: deltaTime с пропуском кадров, кеширование размеров
 
 class Game {
     constructor() {
@@ -15,17 +16,20 @@ class Game {
         this.storage = new GameStorage();
         this.enemyManager = new EnemyManager();
         this.powerUpManager = new PowerUpManager();
-        this.skinShop = new SkinShop(); // Улучшение 1: Волшебный гардероб
-        this.skinEffects = new SkinEffectsSystem(); // Система эффектов скинов
-        this.lightning = new LightningSystem(); // Система молний
+        this.skinShop = new SkinShop();
+        this.skinEffects = new SkinEffectsSystem();
+        this.lightning = new LightningSystem();
 
         // === НОВЫЕ МЕХАНИКИ ===
-        this.crystalRunners = new CrystalRunnerManager(); // Кристалл-непоседа
-        this.ghostWalls = new GhostWallSystem();          // Призрачные стены
-        this.lineLightning = new LineLightningSystem();   // Линейная молния
-        this.magicFlowers = new MagicFlowerManager();     // Волшебный цветок-таймер
-        this.fogLevel = new FogLevelSystem();             // Туманный уровень
-        this.crystalFever = new CrystalFeverSystem();     // Кристальная лихорадка
+        this.crystalRunners = new CrystalRunnerManager();
+        this.ghostWalls = new GhostWallSystem();
+        this.lineLightning = new LineLightningSystem();
+        this.magicFlowers = new MagicFlowerManager();
+        this.fogLevel = new FogLevelSystem();
+        this.crystalFever = new CrystalFeverSystem();
+
+        // === СИСТЕМА МЕНЮ ===
+        this.menu = new MenuSystem(this.canvas, this.ctx);
 
         // Состояние
         this.state = GAME_CONSTANTS.STATES.MENU;
@@ -52,9 +56,9 @@ class Game {
         // Движущиеся стены
         this.movingWalls = [];
 
-        // Звук зарядки молнии (для остановки)
+        // Звук зарядки молнии
         this.lightningChargeSound = null;
-        
+
         // Таймер звуков скинов при движении
         this.skinSoundTimer = 0;
 
@@ -63,6 +67,10 @@ class Game {
         this.touchStartX = 0;
         this.touchStartY = 0;
         this.swipeThreshold = 30;
+
+        // Оптимизация: минимальный интервал между кадрами (16мс ~ 60fps)
+        this._minFrameInterval = 16;
+        this._lastRenderTime = 0;
 
         // Привязка событий
         this._bindEvents();
@@ -163,28 +171,26 @@ class Game {
         const y = clientY - rect.top;
 
         if (this.state === GAME_CONSTANTS.STATES.PAUSED) {
-            // Улучшение 1: иконка гардероба в паузе (левый верхний угол)
-            if (x < 50 && y < 55) {
+            const btn = this.menu.getButtonAt(x, y, 'pause', false);
+            if (btn === 'resume') {
+                this.state = GAME_CONSTANTS.STATES.PLAYING;
+            } else if (btn === 'shop') {
                 this._shopReturnState = GAME_CONSTANTS.STATES.PAUSED;
                 this.state = GAME_CONSTANTS.STATES.SHOP;
                 this.skinShop.open();
-                return;
+            } else if (btn === 'menu') {
+                this.state = GAME_CONSTANTS.STATES.MENU;
             }
-            this.state = GAME_CONSTANTS.STATES.PLAYING;
             return;
         }
 
         if (this.state === GAME_CONSTANTS.STATES.MENU) {
-            // Проверяем нажатие кнопки "Играть"
-            if (this._isButtonPressed(x, y, this.canvas.width / 2, 430, 160, 50)) {
+            const btn = this.menu.getButtonAt(x, y, 'menu', this.storage.hasSave());
+            if (btn === 'play') {
                 this._startNewGame();
-            }
-            // Кнопка "Продолжить"
-            if (this.storage.hasSave() && this._isButtonPressed(x, y, this.canvas.width / 2, 500, 160, 50)) {
+            } else if (btn === 'continue') {
                 this._continueGame();
-            }
-            // Улучшение 1: Кнопка "Гардероб"
-            if (this._isButtonPressed(x, y, this.canvas.width / 2, 570, 160, 50)) {
+            } else if (btn === 'shop') {
                 this._shopReturnState = GAME_CONSTANTS.STATES.MENU;
                 this.state = GAME_CONSTANTS.STATES.SHOP;
                 this.skinShop.open();
@@ -193,18 +199,23 @@ class Game {
         }
 
         if (this.state === GAME_CONSTANTS.STATES.GAME_OVER) {
-            if (this._isButtonPressed(x, y, this.canvas.width / 2, 510, 160, 50)) {
+            const btn = this.menu.getButtonAt(x, y, 'gameover', false);
+            if (btn === 'restart') {
                 this._startNewGame();
             }
             return;
         }
 
-        // Улучшение 1: обработка кликов в магазине
         if (this.state === GAME_CONSTANTS.STATES.SHOP) {
+            const btn = this.menu.getButtonAt(x, y, 'shop', false);
+            if (btn === 'close') {
+                this.skinShop.close();
+                this.state = this._shopReturnState || GAME_CONSTANTS.STATES.MENU;
+                return;
+            }
             const result = this.skinShop.handleClick(x, y, this.canvas.width, this.canvas.height);
             if (result === 'close') {
                 this.skinShop.close();
-                // Возвращаемся в предыдущее состояние
                 this.state = this._shopReturnState || GAME_CONSTANTS.STATES.MENU;
             }
             return;
@@ -365,10 +376,17 @@ class Game {
 
 
 
-    // === ОСНОВНОЙ ИГРОВОЙ ЦИКЛ ===
+    // === ОСНОВНОЙ ИГРОВОЙ ЦИКЛ (ОПТИМИЗИРОВАН) ===
     gameLoop(currentTime) {
-        const deltaTime = Math.min(currentTime - this.lastTime, 50); // Ограничиваем дельту
+        const deltaTime = Math.min(currentTime - this.lastTime, 50);
         this.lastTime = currentTime;
+
+        // Пропуск кадров если слишком часто (не чаще 60fps)
+        if (currentTime - this._lastRenderTime < this._minFrameInterval) {
+            requestAnimationFrame((t) => this.gameLoop(t));
+            return;
+        }
+        this._lastRenderTime = currentTime;
 
         switch (this.state) {
             case GAME_CONSTANTS.STATES.MENU:
@@ -384,14 +402,16 @@ class Game {
                 this._renderPlaying();
                 break;
             case GAME_CONSTANTS.STATES.PAUSED:
+                this._updateMenu(deltaTime);
                 this._renderPlaying();
-                this.renderer.drawPauseScreen();
+                this.menu.renderPauseScreen();
                 break;
             case GAME_CONSTANTS.STATES.BONUS_ROOM:
                 this._updateBonusRoom(deltaTime);
                 this._renderBonusRoom();
                 break;
             case GAME_CONSTANTS.STATES.GAME_OVER:
+                this._updateMenu(deltaTime);
                 this._renderGameOver();
                 break;
             case GAME_CONSTANTS.STATES.LEVEL_COMPLETE:
@@ -402,7 +422,6 @@ class Game {
                 this._updatePortalTransition(deltaTime);
                 this._renderPlaying();
                 break;
-            // Улучшение 1: экран Волшебного Гардероба
             case GAME_CONSTANTS.STATES.SHOP:
                 this._updateShop(deltaTime);
                 this._renderShop();
@@ -414,12 +433,13 @@ class Game {
 
     // === ОБНОВЛЕНИЕ МЕНЮ ===
     _updateMenu(deltaTime) {
+        this.menu.updateBackground(deltaTime);
         this.particles.update(deltaTime);
     }
 
     _renderMenu() {
-        this.renderer.drawMenuScreen(this.storage.hasSave(), performance.now(), this.skinShop.getCrystals());
-        this.renderer.drawParticles(this.particles);
+        const activeSkin = this.skinShop.getActiveSkin();
+        this.menu.renderMainMenu(this.storage.hasSave(), this.skinShop.getCrystals(), activeSkin);
     }
 
     // === ОБНОВЛЕНИЕ НАЧАЛА УРОВНЯ ===
@@ -1068,10 +1088,12 @@ class Game {
     }
 
     _renderGameOver() {
-        this.renderer.drawGameOverScreen(
+        const activeSkin = this.skinShop.getActiveSkin();
+        this.menu.renderGameOver(
             this.player.score,
             this.level,
-            this.storage.getHighScore()
+            this.storage.getHighScore(),
+            activeSkin
         );
     }
 
@@ -1186,7 +1208,7 @@ class Game {
 
     // === Улучшение 1: ОБНОВЛЕНИЕ И РЕНДЕР МАГАЗИНА ===
     _updateShop(deltaTime) {
-        // Обновление анимации покупки
+        this.menu.updateBackground(deltaTime);
         if (this.skinShop.purchaseAnimation) {
             this.skinShop.updatePurchaseAnimation(deltaTime);
         }
@@ -1194,12 +1216,7 @@ class Game {
 
     _renderShop() {
         const time = performance.now();
-        this.renderer.drawShopScreen(this.skinShop, time);
-        
-        // Анимация покупки (поверх всего)
-        if (this.skinShop.purchaseAnimation) {
-            this.renderer.drawPurchaseAnimation(this.skinShop, time);
-        }
+        this.menu.renderShop(this.skinShop, time);
     }
 
     // === Звуки скинов при движении ===
